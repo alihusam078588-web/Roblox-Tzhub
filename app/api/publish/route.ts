@@ -50,7 +50,17 @@ export async function POST(request: Request) {
       addRandomSuffix: false,
     })
     const token = `${exp}.${sign(id, exp)}`
-    const origin = new URL(request.url).origin
+    const forwardedHost = request.headers.get('x-forwarded-host')
+    const forwardedProto = request.headers.get('x-forwarded-proto') ?? 'https'
+    const deploymentHost = process.env.VERCEL_URL
+    const configuredOrigin = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '')
+    const origin = configuredOrigin
+      ? configuredOrigin
+      : forwardedHost
+        ? `${forwardedProto}://${forwardedHost}`
+        : deploymentHost
+          ? `https://${deploymentHost}`
+          : new URL(request.url).origin
     return NextResponse.json({
       id,
       url: `${origin}/api/protected/${id}?token=${token}`,
