@@ -44,11 +44,18 @@ export async function POST(request: Request) {
 
     const id = randomUUID()
     const exp = Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 30
-    await put(`protected/${id}.lua`, result.code, {
-      access: 'private',
-      contentType: 'text/plain; charset=utf-8',
-      addRandomSuffix: false,
-    })
+    await Promise.all([
+      put(`protected/${id}.lua`, result.code, {
+        access: 'private',
+        contentType: 'text/plain; charset=utf-8',
+        addRandomSuffix: false,
+      }),
+      put(`sources/${id}.luau`, body.source, {
+        access: 'private',
+        contentType: 'text/plain; charset=utf-8',
+        addRandomSuffix: false,
+      }),
+    ])
     const token = `${exp}.${sign(id, exp)}`
     const forwardedHost = request.headers.get('x-forwarded-host')
     const forwardedProto = request.headers.get('x-forwarded-proto') ?? 'https'

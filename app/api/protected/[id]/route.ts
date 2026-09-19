@@ -44,7 +44,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   }
 
   try {
-    const result = await get(`protected/${id}.lua`, { access: 'private' })
+    const result = await get(editorMode ? `sources/${id}.luau` : `protected/${id}.lua`, { access: 'private' })
     if (!result) return new NextResponse('Not found', { status: 404 })
     return new NextResponse(result.stream, {
       headers: {
