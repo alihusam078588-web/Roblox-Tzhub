@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useMemo, useRef, useState } from 'react'
+import Link from 'next/link'
 import {
   Binary,
   Check,
@@ -175,6 +176,7 @@ export function ObfuscatorPanel() {
               Heavy VM-layer protection · byte-lossless · under the 200-function limit
             </p>
           </div>
+          <Link href="/links" className="ml-auto text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">Manage links</Link>
         </div>
         <p className="max-w-3xl text-pretty text-sm leading-relaxed text-muted-foreground">
           Your source is encoded byte-for-byte through a rolling key, arithmetic position mixing,
