@@ -16,7 +16,7 @@ import {
   LockKeyhole,
   Link as LinkIcon,
 } from 'lucide-react'
-import { obfuscate, optimizeRegisterSafe, type ObfuscateResult, type RegisterSafeReport } from '@/lib/obfuscator'
+import { analyzeRegisterPressure, obfuscate, optimizeRegisterSafe, type ObfuscateResult, type RegisterPressureReport, type RegisterSafeReport } from '@/lib/obfuscator'
 import { Button } from '@/components/ui/button'
 
 const SAMPLE = `-- Sample Luau script
@@ -71,6 +71,7 @@ export function ObfuscatorPanel() {
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null)
   const [registerSafe, setRegisterSafe] = useState(true)
   const [optimizerReport, setOptimizerReport] = useState<RegisterSafeReport | null>(null)
+  const [pressureReport, setPressureReport] = useState<RegisterPressureReport | null>(null)
   const outputRef = useRef<HTMLTextAreaElement>(null)
 
   const runObfuscate = useCallback(() => {
@@ -81,6 +82,8 @@ export function ObfuscatorPanel() {
     setTimeout(() => {
       try {
         const seed = seedInput.trim() === '' ? undefined : Number(seedInput.trim()) >>> 0
+        const pressure = analyzeRegisterPressure(source)
+        setPressureReport(pressure)
         const optimized = registerSafe ? optimizeRegisterSafe(source) : null
         const workingSource = optimized?.source ?? source
         setOptimizerReport(optimized)
@@ -103,7 +106,7 @@ export function ObfuscatorPanel() {
         setBusy(false)
       }
     }, 30)
-  }, [source, targetMillions, chunkSize, seedInput])
+  }, [source, targetMillions, chunkSize, seedInput, registerSafe])
 
   const handleCopy = useCallback(async () => {
     if (!result) return
@@ -253,6 +256,14 @@ export function ObfuscatorPanel() {
       </div>
     )}
     {optimizerReport?.warnings.map((warning) => <p key={warning} className="mt-2 text-xs text-muted-foreground">{warning}</p>)}
+    {pressureReport && (
+      <div className={`mt-3 rounded-md border p-3 text-xs ${pressureReport.likelyLimitExceeded ? 'border-destructive/40 bg-destructive/10 text-destructive' : 'border-border bg-background text-muted-foreground'}`}>
+        <p className="font-medium">Register check: {pressureReport.likelyLimitExceeded ? 'high risk' : 'no likely limit breach detected'}</p>
+        <p className="mt-1">{pressureReport.message}</p>
+        {pressureReport.lines.length > 0 && <p className="mt-1">Review near source lines: {pressureReport.lines.join(', ')}.</p>}
+        <p className="mt-1">Obfuscation is still allowed, but this check cannot safely rewrite a large scope automatically.</p>
+      </div>
+    )}
   </section>
 
   {/* Controls */}

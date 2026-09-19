@@ -135,6 +135,46 @@ function luaByteEscape(bytes: number[]): string {
 // ---------------------------------------------------------------------------
 // Main entry point.
 // ---------------------------------------------------------------------------
+export interface RegisterPressureReport {
+  estimatedLocals: number
+  estimatedFunctions: number
+  likelyLimitExceeded: boolean
+  lines: number[]
+  message: string
+}
+
+export function analyzeRegisterPressure(source: string): RegisterPressureReport {
+  const lines = source.split('\n')
+  let depth = 0
+  let currentLocals = 0
+  let maxLocals = 0
+  let estimatedFunctions = 0
+  const problemLines: number[] = []
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]
+    if (/\bfunction\b|\bdo\b|\bthen\b/.test(line) && !/\bend\s*[,)]?/.test(line)) depth++
+    const locals = line.match(/\blocal\b/g)?.length ?? 0
+    if (locals) {
+      currentLocals += locals
+      if (currentLocals > maxLocals) maxLocals = currentLocals
+      if (currentLocals >= 180) problemLines.push(index + 1)
+    }
+    if (/\bfunction\b/.test(line)) estimatedFunctions++
+    if (/^\s*end\b/.test(line)) currentLocals = Math.max(0, currentLocals - 1)
+    if (depth > 0 && /\blocal\b/.test(line) && currentLocals >= 180) problemLines.push(index + 1)
+  }
+  const likelyLimitExceeded = maxLocals >= 200
+  return {
+    estimatedLocals: maxLocals,
+    estimatedFunctions,
+    likelyLimitExceeded,
+    lines: [...new Set(problemLines)].slice(0, 20),
+    message: likelyLimitExceeded
+      ? `This source likely exceeds Luau's 200-register limit in one scope (estimated ${maxLocals} locals). Automatic rewriting was not applied because it could break upvalues and callbacks.`
+      : `Estimated peak local pressure: ${maxLocals}/200. This is a heuristic, not a Luau compiler result.`,
+  }
+}
+
 export interface RegisterSafeReport {
   source: string
   serviceLookupsFound: number
