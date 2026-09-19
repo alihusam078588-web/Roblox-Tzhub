@@ -69,6 +69,7 @@ export function ObfuscatorPanel() {
   const [password, setPassword] = useState('')
   const [publishing, setPublishing] = useState(false)
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null)
+  const loadstringSnippet = publishedUrl ? `loadstring(game:HttpGet("${publishedUrl}"))()` : ''
   const [registerSafe, setRegisterSafe] = useState(true)
   const [optimizerReport, setOptimizerReport] = useState<RegisterSafeReport | null>(null)
   const [pressureReport, setPressureReport] = useState<RegisterPressureReport | null>(null)
@@ -439,7 +440,12 @@ export function ObfuscatorPanel() {
           <div className="mt-3 rounded-md border border-accent/30 bg-background p-3">
             <p className="mb-2 text-xs text-muted-foreground">Use this URL with your executor&apos;s HTTP request function. Browser requests are denied.</p>
             <code className="block break-all font-mono text-xs text-accent">{publishedUrl}</code>
-            <button type="button" onClick={() => navigator.clipboard.writeText(publishedUrl)} className="mt-2 text-xs text-muted-foreground underline hover:text-foreground">Copy URL</button>
+            <p className="mt-3 mb-1 text-xs text-muted-foreground">Executor loadstring</p>
+            <code className="block break-all rounded bg-muted p-2 font-mono text-xs text-accent">{loadstringSnippet}</code>
+            <div className="mt-2 flex gap-3">
+              <button type="button" onClick={() => navigator.clipboard.writeText(publishedUrl)} className="text-xs text-muted-foreground underline hover:text-foreground">Copy URL</button>
+              <button type="button" onClick={() => navigator.clipboard.writeText(loadstringSnippet)} className="text-xs text-muted-foreground underline hover:text-foreground">Copy loadstring</button>
+            </div>
           </div>
         )}
       </section>
