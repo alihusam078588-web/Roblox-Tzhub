@@ -84,6 +84,11 @@ export function ObfuscatorPanel() {
         const seed = seedInput.trim() === '' ? undefined : Number(seedInput.trim()) >>> 0
         const pressure = analyzeRegisterPressure(source)
         setPressureReport(pressure)
+        if (!pressure.parseOk) {
+          setResult(null)
+          setError(pressure.message)
+          return
+        }
         const optimized = registerSafe ? optimizeRegisterSafe(source) : null
         const workingSource = optimized?.source ?? source
         setOptimizerReport(optimized)

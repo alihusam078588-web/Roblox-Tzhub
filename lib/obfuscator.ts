@@ -1,3 +1,5 @@
+import { analyzeScopes, parse } from 'luau-parser'
+
 // Luau "VM-layer" obfuscator.
 //
 // Strategy (chosen deliberately to satisfy the constraints):
@@ -136,6 +138,8 @@ function luaByteEscape(bytes: number[]): string {
 // Main entry point.
 // ---------------------------------------------------------------------------
 export interface RegisterPressureReport {
+  parseOk: boolean
+  parseError?: string
   estimatedLocals: number
   estimatedFunctions: number
   likelyLimitExceeded: boolean
@@ -144,34 +148,33 @@ export interface RegisterPressureReport {
 }
 
 export function analyzeRegisterPressure(source: string): RegisterPressureReport {
-  const lines = source.split('\n')
-  let depth = 0
-  let currentLocals = 0
-  let maxLocals = 0
-  let estimatedFunctions = 0
-  const problemLines: number[] = []
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index]
-    if (/\bfunction\b|\bdo\b|\bthen\b/.test(line) && !/\bend\s*[,)]?/.test(line)) depth++
-    const locals = line.match(/\blocal\b/g)?.length ?? 0
-    if (locals) {
-      currentLocals += locals
-      if (currentLocals > maxLocals) maxLocals = currentLocals
-      if (currentLocals >= 180) problemLines.push(index + 1)
+  try {
+    const program = parse(source)
+    const scopes = analyzeScopes(program, { builtinGlobals: ['game', 'workspace', 'script', 'print', 'task'] })
+    const estimatedLocals = [...scopes.bindings.values()].filter((binding) => binding.kind !== 'global').length
+    const estimatedFunctions = scopes.bindings.size
+    const likelyLimitExceeded = estimatedLocals >= 180
+    return {
+      parseOk: true,
+      estimatedLocals,
+      estimatedFunctions,
+      likelyLimitExceeded,
+      lines: [],
+      message: likelyLimitExceeded
+        ? `AST analysis found ${estimatedLocals} lexical locals. No unsafe scope rewrite was applied; closures and callbacks require binding-aware transformation.`
+        : `AST validation passed. ${estimatedLocals} lexical locals were resolved; no likely global register breach was detected.`,
     }
-    if (/\bfunction\b/.test(line)) estimatedFunctions++
-    if (/^\s*end\b/.test(line)) currentLocals = Math.max(0, currentLocals - 1)
-    if (depth > 0 && /\blocal\b/.test(line) && currentLocals >= 180) problemLines.push(index + 1)
-  }
-  const likelyLimitExceeded = maxLocals >= 200
-  return {
-    estimatedLocals: maxLocals,
-    estimatedFunctions,
-    likelyLimitExceeded,
-    lines: [...new Set(problemLines)].slice(0, 20),
-    message: likelyLimitExceeded
-      ? `This source likely exceeds Luau's 200-register limit in one scope (estimated ${maxLocals} locals). Automatic rewriting was not applied because it could break upvalues and callbacks.`
-      : `Estimated peak local pressure: ${maxLocals}/200. This is a heuristic, not a Luau compiler result.`,
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown Luau parse error.'
+    return {
+      parseOk: false,
+      parseError: message,
+      estimatedLocals: 0,
+      estimatedFunctions: 0,
+      likelyLimitExceeded: true,
+      lines: [],
+      message: `Luau parsing failed, so no source transformation was applied: ${message}`,
+    }
   }
 }
 
@@ -192,7 +195,24 @@ export interface RegisterSafeReport {
  * preserving behavior over claiming to solve every register-limit case.
  */
 export function optimizeRegisterSafe(source: string): RegisterSafeReport {
-  const lines = source.split('\\n')
+  // Do not perform text substitutions. Until a binding-aware AST rewrite pass
+  // exists, leaving the source unchanged is the only provably safe behavior.
+  try {
+    parse(source)
+  } catch {
+    return { source, serviceLookupsFound: 0, serviceLookupsRewritten: 0, playerGuiLookupsFound: 0, playerGuiLookupsRewritten: 0, skippedWindUI: 0, warnings: ['AST validation failed; source was left unchanged.'] }
+  }
+  return {
+    source,
+    serviceLookupsFound: 0,
+    serviceLookupsRewritten: 0,
+    playerGuiLookupsFound: 0,
+    playerGuiLookupsRewritten: 0,
+    skippedWindUI: 0,
+    warnings: ['AST validation passed. No source rewrite was applied because a binding-aware transformation cannot be proven safe yet.'],
+  }
+
+  const lines = source.split('\n')
   const services = new Map<string, string>()
   let serviceLookupsFound = 0
   let serviceLookupsRewritten = 0
@@ -307,40 +327,21 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
     fn: namer(), // loaded chunk
   }
 
-  const commentWords = () => {
-    const parts: string[] = []
-    const count = randInt(rng, 4, 10)
-    for (let i = 0; i < count; i++) {
-      let w = WORDS[randInt(rng, 0, WORDS.length - 1)]
-      if (rng() < 0.4) w += '_' + WORDS[randInt(rng, 0, WORDS.length - 1)]
-      if (rng() < 0.3) w += '_' + randInt(rng, 0, 99999)
-      parts.push(w)
-    }
-    return parts.join('; ')
-  }
-  const lineComment = () => `--[[ ${commentWords()}; ]]`
-
-  // 6. Assemble the generated program.
+  // 6. Assemble only runtime-essential code. No comments, dead code, or padding
+  // are emitted: output size must come from the encoded source and decoder.
   const lines: string[] = []
-
-  lines.push(lineComment())
-  lines.push(`-- protected build ${seed}; ${commentWords()};`)
-  lines.push(lineComment())
 
   // Inverse S-box: values invP[0..255] in order (decode reads IP[e + 1]).
   lines.push(`local ${N.ip} = {${invP.join(',')}};`)
-  lines.push(lineComment())
   lines.push(`local ${N.key} = {${key.join(',')}};`)
   lines.push(`local ${N.kl} = #${N.key};`)
   lines.push(`local ${N.data} = {};`)
 
   // Payload chunks: one local table, unlimited inserts -> respects Luau's
   // 200-local-per-scope limit.
-  let commentEvery = 0
   for (let off = 0; off < encoded.length; off += chunkSize) {
     const chunk = encoded.slice(off, off + chunkSize)
     lines.push(`${N.data}[#${N.data} + 1] = "${luaByteEscape(chunk)}";`)
-    if (++commentEvery % 5 === 0) lines.push(lineComment())
   }
   if (encoded.length === 0) {
     lines.push(`${N.data}[#${N.data} + 1] = "";`)
@@ -357,25 +358,14 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
   lines.push(`  local ${N.mix} = (${N.loop} * ${MIX_A} + ${MIX_B}) % 256;`)
   lines.push(`  ${N.out}[${N.loop}] = string.char((${N.t} - ${N.kw} - ${N.mix}) % 256);`)
   lines.push(`end;`)
-  lines.push(lineComment())
   lines.push(`local ${N.src}_final = table.concat(${N.out});`)
   lines.push(`local ${N.ld} = (loadstring or load);`)
   lines.push(`local ${N.fn} = assert(${N.ld}(${N.src}_final, "=protected"));`)
   lines.push(`return ${N.fn}(...);`)
 
-  // 7. Pad to the requested size with binary-safe block comments woven throughout.
-  let code = lines.join('\n') + '\n'
-  if (code.length < targetSize) {
-    const pad: string[] = []
-    let remaining = targetSize - code.length
-    while (remaining > 0) {
-      const block = lineComment() + '\n'
-      pad.push(block)
-      remaining -= block.length
-    }
-    // Splice padding into the payload region so it appears "throughout".
-    code = code + pad.join('')
-  }
+  // 7. No filler is emitted. targetSize remains accepted for API compatibility.
+  void targetSize
+  const code = lines.join('\n') + '\n'
 
   const functionCount = (code.match(/\bfunction\b/g) || []).length
 
