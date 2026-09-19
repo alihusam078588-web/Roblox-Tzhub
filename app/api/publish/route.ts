@@ -1,7 +1,7 @@
 import { put } from '@vercel/blob'
 import { NextResponse } from 'next/server'
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
-import { obfuscate } from '@/lib/obfuscator'
+import { obfuscate, optimizeRegisterSafe } from '@/lib/obfuscator'
 
 export const maxDuration = 60
 
@@ -33,10 +33,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Source script is too large.' }, { status: 413 })
     }
 
-    const result = obfuscate(body.source, {
-      targetSize: Math.min(Math.max(Number(body.targetSize) || 2_000_000, 0), 8_000_000),
-      chunkSize: Math.min(Math.max(Number(body.chunkSize) || 1024, 64), 8192),
-      seed: body.seed ? Number(body.seed) >>> 0 : undefined,
+    const optimizedSource = optimizeRegisterSafe(body.source).source
+    const result = obfuscate(optimizedSource, {
+      targetSize: Math.max(0, Number(body.targetSize) || 2_000_000),
+      chunkSize: Math.max(64, Number(body.chunkSize) || 1024),
+      seed: Number.isFinite(body.seed) ? Number(body.seed) >>> 0 : undefined,
     })
     if (!result.roundtripOk) {
       return NextResponse.json({ error: 'Round-trip verification failed.' }, { status: 422 })

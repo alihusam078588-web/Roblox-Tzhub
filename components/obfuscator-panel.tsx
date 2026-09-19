@@ -16,7 +16,7 @@ import {
   LockKeyhole,
   Link as LinkIcon,
 } from 'lucide-react'
-import { obfuscate, type ObfuscateResult } from '@/lib/obfuscator'
+import { obfuscate, optimizeRegisterSafe, type ObfuscateResult, type RegisterSafeReport } from '@/lib/obfuscator'
 import { Button } from '@/components/ui/button'
 
 const SAMPLE = `-- Sample Luau script
@@ -69,6 +69,8 @@ export function ObfuscatorPanel() {
   const [password, setPassword] = useState('')
   const [publishing, setPublishing] = useState(false)
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null)
+  const [registerSafe, setRegisterSafe] = useState(true)
+  const [optimizerReport, setOptimizerReport] = useState<RegisterSafeReport | null>(null)
   const outputRef = useRef<HTMLTextAreaElement>(null)
 
   const runObfuscate = useCallback(() => {
@@ -79,7 +81,10 @@ export function ObfuscatorPanel() {
     setTimeout(() => {
       try {
         const seed = seedInput.trim() === '' ? undefined : Number(seedInput.trim()) >>> 0
-        const res = obfuscate(source, {
+        const optimized = registerSafe ? optimizeRegisterSafe(source) : null
+        const workingSource = optimized?.source ?? source
+        setOptimizerReport(optimized)
+        const res = obfuscate(workingSource, {
           targetSize: Math.max(0, targetMillions) * 1_000_000,
           chunkSize,
           seed,
@@ -232,8 +237,26 @@ export function ObfuscatorPanel() {
             className="h-80 w-full resize-y rounded-lg border border-border bg-card p-4 font-mono text-[13px] leading-relaxed text-card-foreground shadow-inner outline-none transition-colors placeholder:text-muted-foreground/60 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
           />
 
-          {/* Controls */}
-          <div className="grid grid-cols-2 gap-4 rounded-lg border border-border bg-card/60 p-4 sm:grid-cols-3">
+  <section className="rounded-lg border border-accent/30 bg-accent/5 p-4">
+    <label className="flex cursor-pointer items-start gap-3">
+      <input type="checkbox" checked={registerSafe} onChange={(e) => setRegisterSafe(e.target.checked)} className="mt-1 size-4 accent-primary" />
+      <span>
+        <span className="block font-mono text-sm font-medium text-foreground">Register-safe optimizer</span>
+        <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">Deduplicates exact repeated service and PlayerGui lookups only. WindUI callbacks and feature code are skipped.</span>
+      </span>
+    </label>
+    {optimizerReport && (
+      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        <span>Services: {optimizerReport.serviceLookupsRewritten} rewritten / {optimizerReport.serviceLookupsFound} found</span>
+        <span>PlayerGui: {optimizerReport.playerGuiLookupsRewritten} rewritten / {optimizerReport.playerGuiLookupsFound} found</span>
+        <span>WindUI skipped: {optimizerReport.skippedWindUI}</span>
+      </div>
+    )}
+    {optimizerReport?.warnings.map((warning) => <p key={warning} className="mt-2 text-xs text-muted-foreground">{warning}</p>)}
+  </section>
+
+  {/* Controls */}
+  <div className="grid grid-cols-2 gap-4 rounded-lg border border-border bg-card/60 p-4 sm:grid-cols-3">
             <div className="flex flex-col gap-1.5">
               <label htmlFor="target" className="text-xs font-medium text-muted-foreground">
                 Target size (M chars)

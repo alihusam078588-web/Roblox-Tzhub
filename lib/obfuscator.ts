@@ -135,6 +135,79 @@ function luaByteEscape(bytes: number[]): string {
 // ---------------------------------------------------------------------------
 // Main entry point.
 // ---------------------------------------------------------------------------
+export interface RegisterSafeReport {
+  source: string
+  serviceLookupsFound: number
+  serviceLookupsRewritten: number
+  playerGuiLookupsFound: number
+  playerGuiLookupsRewritten: number
+  skippedWindUI: number
+  warnings: string[]
+}
+
+/**
+ * Conservative source cleanup. It only rewrites repeated, exact lookup
+ * expressions on standalone local declarations; it never renames identifiers,
+ * removes callbacks, or touches WindUI lines. This intentionally favors
+ * preserving behavior over claiming to solve every register-limit case.
+ */
+export function optimizeRegisterSafe(source: string): RegisterSafeReport {
+  const lines = source.split('\\n')
+  const services = new Map<string, string>()
+  let serviceLookupsFound = 0
+  let serviceLookupsRewritten = 0
+  let playerGuiLookupsFound = 0
+  let playerGuiLookupsRewritten = 0
+  let skippedWindUI = 0
+
+  const optimized = lines.map((line) => {
+    if (/windui/i.test(line)) {
+      if (/GetService|PlayerGui/i.test(line)) skippedWindUI++
+      return line
+    }
+    const service = line.match(/^(\\s*local\\s+([A-Za-z_]\\w*)\\s*=\\s*)game:GetService\\(["']([A-Za-z]+)["']\\)(\\s*;?\\s*(?:--.*)?)$/)
+    if (service) {
+      const [, prefix, variable, serviceName, suffix] = service
+      serviceLookupsFound++
+      const canonical = services.get(serviceName)
+      if (canonical) {
+        serviceLookupsRewritten++
+        return `${prefix}${canonical}${suffix}`
+      }
+      services.set(serviceName, variable)
+      return line
+    }
+    const gui = line.match(/^(\\s*local\\s+([A-Za-z_]\\w*)\\s*=\\s*)([A-Za-z_]\\w*)\\.LocalPlayer\\.PlayerGui(\\s*;?\\s*(?:--.*)?)$/)
+    if (gui) {
+      const [, prefix, variable, playerRoot, suffix] = gui
+      playerGuiLookupsFound++
+      const canonical = services.get('__PlayerGui__')
+      if (canonical) {
+        playerGuiLookupsRewritten++
+        return `${prefix}${canonical}${suffix}`
+      }
+      services.set('__PlayerGui__', variable)
+      return line
+    }
+    return line
+  })
+
+  const warnings: string[] = []
+  if (serviceLookupsRewritten || playerGuiLookupsRewritten) warnings.push('Only exact standalone local lookups were deduplicated; callbacks and feature code were preserved.')
+  if (source.length > 500_000) warnings.push('Large scripts may still exceed Luau register limits inside one function; this optimizer cannot safely split unknown scopes.')
+  if (!serviceLookupsRewritten && !playerGuiLookupsRewritten) warnings.push('No provably safe duplicate lookups were found.')
+
+  return {
+    source: optimized.join('\\n'),
+    serviceLookupsFound,
+    serviceLookupsRewritten,
+    playerGuiLookupsFound,
+    playerGuiLookupsRewritten,
+    skippedWindUI,
+    warnings,
+  }
+}
+
 export function obfuscate(source: string, options: ObfuscateOptions = {}): ObfuscateResult {
   const targetSize = Math.max(0, options.targetSize ?? 2_000_000)
   const chunkSize = Math.max(64, options.chunkSize ?? 1024)

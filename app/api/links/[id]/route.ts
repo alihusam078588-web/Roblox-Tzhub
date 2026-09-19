@@ -1,5 +1,5 @@
 import { del, get, put } from '@vercel/blob'
-import { obfuscate } from '@/lib/obfuscator'
+import { obfuscate, optimizeRegisterSafe } from '@/lib/obfuscator'
 import { NextResponse } from 'next/server'
 import { authorized } from '@/app/api/links/route'
 
@@ -17,7 +17,8 @@ export async function PUT(request: Request, context: { params: Promise<{ id: str
     const body = await request.json()
     if (!authorized(body.password)) return NextResponse.json({ error: 'Invalid password.' }, { status: 401 })
     if (typeof body.source !== 'string' || !body.source.trim()) return NextResponse.json({ error: 'Source code is required.' }, { status: 400 })
-    const result = obfuscate(body.source, { targetSize: 2_000_000, chunkSize: 1024 })
+    const optimizedSource = optimizeRegisterSafe(body.source).source
+    const result = obfuscate(optimizedSource, { targetSize: 2_000_000, chunkSize: 1024 })
     if (!result.roundtripOk) return NextResponse.json({ error: 'Obfuscation verification failed.' }, { status: 422 })
     await Promise.all([
       put(sourcePathname(id), body.source, { access: 'private', contentType: 'text/plain; charset=utf-8', addRandomSuffix: false, allowOverwrite: true }),
