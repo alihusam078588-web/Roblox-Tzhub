@@ -1,0 +1,2 @@
+import { ResourceManager } from '@/components/admin-dashboard'
+export default function ExecutionsPage() { return <ResourceManager resource="executions" title="Executions" description="Review allowed, denied, blacklisted, and unsupported PlaceId attempts recorded by the loader." columns={['username','userId','placeId','gameName','scriptVersion','status','denialReason','createdAt']} fields={[]} /> }

@@ -1,0 +1,2 @@
+import { AdminShell } from '@/components/admin-dashboard'
+export default function SettingsPage() { return <AdminShell title="Settings"><div className="rounded-xl border border-border bg-card p-5"><h2 className="font-semibold">Runtime settings</h2><p className="mt-2 text-sm text-muted-foreground">Authentication, storage, and loader enforcement are configured server-side. Use the project Vars panel for environment changes.</p></div></AdminShell> }

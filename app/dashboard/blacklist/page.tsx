@@ -1,0 +1,2 @@
+import { ResourceManager } from '@/components/admin-dashboard'
+export default function BlacklistPage() { return <ResourceManager resource="blacklist" title="Blacklist" description="Manage active and temporary access blocks. Every change is audited and enforced by the execution API." columns={['usernameSnapshot','userId','reason','expiresAt','createdBy','active']} fields={['usernameSnapshot','userId','reason','expiresAt']} /> }

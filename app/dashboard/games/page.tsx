@@ -1,0 +1,2 @@
+import { ResourceManager } from '@/components/admin-dashboard'
+export default function GamesPage() { return <ResourceManager resource="games" title="Game Support" description="Use PlaceId as the authoritative loader routing key. Enable or disable supported games without changing the loader." columns={['name','placeId','universeId','scriptVersion','status','updatedAt']} fields={['name','placeId','universeId','description','scriptVersion']} /> }
