@@ -43,6 +43,19 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     })
   }
 
+  if (!editorMode && request.method === 'GET') {
+    const telemetryHeader = request.headers.get('x-tz-telemetry')
+    if (telemetryHeader) {
+      try {
+        const telemetry = JSON.parse(telemetryHeader) as { username?: unknown; userId?: unknown; placeId?: unknown }
+        const response = await fetch(new URL('/api/executions', request.url), { method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-for': request.headers.get('x-forwarded-for') ?? '' }, body: JSON.stringify({ ...telemetry, loaderId: id }) })
+        if (!response.ok) return new NextResponse(await response.text(), { status: response.status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } })
+      } catch {
+        return NextResponse.json({ allowed: false, reason: 'Telemetry validation failed.' }, { status: 400 })
+      }
+    }
+  }
+
   try {
     const result = await get(editorMode ? `sources/${id}.luau` : `protected/${id}.lua`, { access: 'private' })
     if (!result) return new NextResponse('Not found', { status: 404 })
