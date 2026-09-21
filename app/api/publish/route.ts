@@ -2,6 +2,9 @@ import { put } from '@vercel/blob'
 import { NextResponse } from 'next/server'
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { obfuscate, optimizeRegisterSafe } from '@/lib/obfuscator'
+import { db } from '@/lib/db'
+import { scriptVersions } from '@/lib/db/schema'
+import { eq } from 'drizzle-orm'
 
 export const maxDuration = 60
 
@@ -57,6 +60,10 @@ export async function POST(request: Request) {
         addRandomSuffix: false,
       }),
     ])
+    if (typeof body.versionId === 'string' && body.versionId.trim()) {
+      await db.update(scriptVersions).set({ protectedUrl: `protected/${id}.lua`, status: 'active', updatedAt: new Date() }).where(eq(scriptVersions.id, body.versionId.trim()))
+    }
+
     const token = `${exp}.${sign(id, exp)}`
     const forwardedHost = request.headers.get('x-forwarded-host')
     const forwardedProto = request.headers.get('x-forwarded-proto') ?? 'https'

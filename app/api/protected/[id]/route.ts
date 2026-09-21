@@ -1,72 +1,49 @@
 import { get } from '@vercel/blob'
 import { NextResponse } from 'next/server'
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { and, eq, gt, isNull, or } from 'drizzle-orm'
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
+import { db } from '@/lib/db'
+import { blacklistEntries, executionEvents, protectedLinks, scriptVersions, supportedGames } from '@/lib/db/schema'
 
 function validPassword(value: string | null) {
   const secret = process.env.OBFUSCATOR_PASSWORD ?? ''
   if (!value || !secret) return false
-  const left = Buffer.from(value)
-  const right = Buffer.from(secret)
+  const left = Buffer.from(value), right = Buffer.from(secret)
   return left.length === right.length && timingSafeEqual(left, right)
 }
+const text = (value: unknown, max = 160) => typeof value === 'string' ? value.trim().slice(0, max) || null : null
 
-function validToken(id: string, token: string | null) {
-  const secret = process.env.OBFUSCATOR_PASSWORD
-  if (!secret || !token) return false
-  const [rawExp, signature] = token.split('.')
-  const exp = Number(rawExp)
-  if (!Number.isSafeInteger(exp) || exp < Math.floor(Date.now() / 1000) || !signature) return false
-  const expected = createHmac('sha256', secret).update(`${id}.${exp}`).digest('hex')
-  const left = Buffer.from(signature)
-  const right = Buffer.from(expected)
-  return left.length === right.length && timingSafeEqual(left, right)
+async function logEvent(input: { loaderId: string; status: string; reason?: string | null; userId?: string | null; username?: string | null; placeId?: string | null; gameName?: string | null; scriptId?: string | null; version?: string | null; ip: string }) {
+  await db.insert(executionEvents).values({ id: randomUUID(), loaderId: input.loaderId, status: input.status, denialReason: input.reason ?? null, userId: input.userId ?? null, username: input.username ?? null, placeId: input.placeId ?? null, gameName: input.gameName ?? null, scriptId: input.scriptId ?? null, scriptVersion: input.version ?? null, ipHash: createHash('sha256').update(input.ip).digest('hex').slice(0, 24) })
 }
 
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params
   const url = new URL(request.url)
-  const token = url.searchParams.get('token')
-  const editorPassword = url.searchParams.get('password')
-  const editorMode = url.searchParams.get('mode') === 'edit' && validPassword(editorPassword)
+  const editorMode = url.searchParams.get('mode') === 'edit' && validPassword(url.searchParams.get('password'))
   const acceptsHtml = request.headers.get('accept')?.includes('text/html')
+  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown'
+  if (editorMode) return serveBlob(`sources/${id}.luau`)
+  if (acceptsHtml) return new NextResponse('Access denied.', { status: 403, headers: { 'Cache-Control': 'no-store' } })
 
-  if (!editorMode && (!validToken(id, token) || acceptsHtml)) {
-    if (acceptsHtml) {
-      return new NextResponse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Access denied</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#111820;color:#e6edf3;font:16px ui-monospace,monospace}main{max-width:560px;margin:24px;padding:32px;border:1px solid #39434f;border-radius:12px;background:#1b242d;box-shadow:0 20px 60px #0006}h1{margin:0 0 12px;color:#f0b429;font-size:22px}p{line-height:1.6;color:#aeb9c5}</style></head><body><main><h1>Access denied</h1><p>This protected loader is available only to an authorized executor request. Do not dump or try to deobfuscate this code.</p></main></body></html>`, {
-        status: 403,
-        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Frame-Options': 'DENY' },
-      })
-    }
-    return new NextResponse('Do not dump or try to deobfuscate this code.', {
-      status: 403,
-      headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
-    })
-  }
+  const telemetry = (() => { try { return JSON.parse(request.headers.get('x-tz-telemetry') ?? '{}') as Record<string, unknown> } catch { return {} } })()
+  const userId = text(telemetry.userId, 100), username = text(telemetry.username, 100), placeId = text(telemetry.placeId, 40)
+  const [link] = await db.select().from(protectedLinks).where(eq(protectedLinks.id, id)).limit(1)
+  const deny = async (reason: string, status = 403) => { await logEvent({ loaderId: id, status: 'denied', reason, userId, username, placeId, ip }); return NextResponse.json({ allowed: false, reason }, { status, headers: { 'Cache-Control': 'no-store' } }) }
+  if (!link) return deny('Invalid loader ID.', 404)
+  if (!link.active) return deny('Protected link is disabled.')
+  if (link.expiresAt && link.expiresAt <= new Date()) return deny('Protected link has expired.')
+  if (!link.versionId || !link.gameId) return deny('Protected link is not fully configured.', 500)
+  const [game] = await db.select().from(supportedGames).where(and(eq(supportedGames.id, link.gameId), eq(supportedGames.status, 'active'), placeId ? eq(supportedGames.placeId, placeId) : eq(supportedGames.id, link.gameId))).limit(1)
+  if (!game) return deny(placeId ? 'Unsupported PlaceId or inactive game.' : 'PlaceId is required.')
+  const [version] = await db.select().from(scriptVersions).where(and(eq(scriptVersions.id, link.versionId), eq(scriptVersions.scriptId, link.scriptId ?? ''), eq(scriptVersions.status, 'active'))).limit(1)
+  if (!version) return deny('Script version is disabled or unavailable.')
+  const [blocked] = await db.select().from(blacklistEntries).where(and(eq(blacklistEntries.active, true), userId ? eq(blacklistEntries.userId, userId) : eq(blacklistEntries.usernameSnapshot, username ?? ''), or(isNull(blacklistEntries.expiresAt), gt(blacklistEntries.expiresAt, new Date())))).limit(1)
+  if (blocked) return deny(blocked.reason)
+  await logEvent({ loaderId: id, status: 'allowed', userId, username, placeId, gameName: game.name, scriptId: version.scriptId, version: version.version, ip })
+  return serveBlob(version.protectedUrl ?? `protected/${version.id}.lua`)
+}
 
-  if (!editorMode && request.method === 'GET') {
-    const telemetryHeader = request.headers.get('x-tz-telemetry')
-    if (telemetryHeader) {
-      try {
-        const telemetry = JSON.parse(telemetryHeader) as { username?: unknown; userId?: unknown; placeId?: unknown }
-        const response = await fetch(new URL('/api/executions', request.url), { method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-for': request.headers.get('x-forwarded-for') ?? '' }, body: JSON.stringify({ ...telemetry, loaderId: id }) })
-        if (!response.ok) return new NextResponse(await response.text(), { status: response.status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } })
-      } catch {
-        return NextResponse.json({ allowed: false, reason: 'Telemetry validation failed.' }, { status: 400 })
-      }
-    }
-  }
-
-  try {
-    const result = await get(editorMode ? `sources/${id}.luau` : `protected/${id}.lua`, { access: 'private' })
-    if (!result) return new NextResponse('Not found', { status: 404 })
-    return new NextResponse(result.stream, {
-      headers: {
-        'Content-Type': 'text/plain; charset=utf-8',
-        'Cache-Control': 'private, no-store',
-        'X-Content-Type-Options': 'nosniff',
-      },
-    })
-  } catch {
-    return new NextResponse('Not found', { status: 404 })
-  }
+async function serveBlob(path: string) {
+  try { const result = await get(path, { access: 'private' }); if (!result) return new NextResponse('Not found', { status: 404 }); return new NextResponse(result.stream, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' } }) } catch { return new NextResponse('Not found', { status: 404 }) }
 }
