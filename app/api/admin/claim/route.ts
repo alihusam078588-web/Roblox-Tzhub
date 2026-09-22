@@ -6,7 +6,18 @@ import { appAdmins, auditLogs } from '@/lib/db/schema'
 import { count } from 'drizzle-orm'
 import { randomUUID } from 'node:crypto'
 
-export async function POST() {
+export async function POST(request: Request) {
+  const expectedSecret = process.env.TZHUB_ADMIN_BOOTSTRAP_SECRET
+  if (!expectedSecret) return NextResponse.json({ error: 'Bootstrap is not configured.' }, { status: 503 })
+  let body: { bootstrapSecret?: unknown }
+  try {
+    body = await request.json()
+  } catch {
+    return NextResponse.json({ error: 'Invalid request.' }, { status: 400 })
+  }
+  if (typeof body.bootstrapSecret !== 'string' || body.bootstrapSecret.length < 32 || body.bootstrapSecret !== expectedSecret) {
+    return NextResponse.json({ error: 'Invalid bootstrap credentials.' }, { status: 403 })
+  }
   const session = await auth.api.getSession({ headers: await headers() })
   if (!session?.user) return NextResponse.json({ error: 'Sign in required.' }, { status: 401 })
   const [{ value }] = await db.select({ value: count() }).from(appAdmins)
