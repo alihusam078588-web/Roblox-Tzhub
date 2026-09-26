@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server'
 import { and, desc, eq } from 'drizzle-orm'
 import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
-import { appAdmins, auditLogs, blacklistEntries, executionEvents, protectedLinks, scriptVersions, supportedGames } from '@/lib/db/schema'
+import { appAdmins, auditLogs, blacklistEntries, executionEvents, protectedLinks, scriptVersions, supportedGames, services } from '@/lib/db/schema'
 
 async function admin() {
   const session = await auth.api.getSession({ headers: await headers() })
@@ -27,6 +27,7 @@ export async function GET(_: Request, context: { params: Promise<{ resource: str
     executions: db.select().from(executionEvents).orderBy(desc(executionEvents.createdAt)).limit(100),
     'audit-logs': db.select().from(auditLogs).orderBy(desc(auditLogs.createdAt)).limit(100),
     users: db.select({ id: appAdmins.id, email: appAdmins.email, displayName: appAdmins.displayName, createdAt: appAdmins.createdAt }).from(appAdmins).orderBy(desc(appAdmins.createdAt)).limit(100),
+    services: db.select().from(services).orderBy(desc(services.createdAt)).limit(100),
   } as const
   const query = queries[resource as keyof typeof queries]
   if (!query) return NextResponse.json({ error: 'Unknown resource.' }, { status: 404 })
@@ -52,6 +53,11 @@ export async function POST(request: Request, context: { params: Promise<{ resour
       const name = text(body.name, 120), version = text(body.version, 40)
       if (!name || !version) return NextResponse.json({ error: 'Name and version are required.' }, { status: 400 })
       await db.insert(scriptVersions).values({ id, scriptId: text(body.scriptId, 120) ?? id, gameId: text(body.gameId, 120), name, version, protectedUrl: text(body.protectedUrl, 1000), releaseNotes: text(body.releaseNotes, 1000), status: text(body.status, 30) ?? 'active' })
+    } else if (resource === 'services') {
+      const name = text(body.name, 120)
+      if (!name) return NextResponse.json({ error: 'Service name is required.' }, { status: 400 })
+      const placeIds = Array.isArray(body.placeIds) ? body.placeIds.filter((value: unknown): value is string => typeof value === 'string').map((value) => value.trim()).filter(Boolean).slice(0, 100) : String(body.placeIds ?? '').split(',').map((value) => value.trim()).filter(Boolean).slice(0, 100)
+      await db.insert(services).values({ id, name, description: text(body.description, 500), placeIds, scriptId: text(body.scriptId, 120), enabled: body.enabled !== false })
     } else if (resource === 'links') {
       const versionId = text(body.versionId, 120), gameId = text(body.gameId, 120), scriptId = text(body.scriptId, 120)
       if (!versionId || !gameId || !scriptId) return NextResponse.json({ error: 'Version, game, and script are required.' }, { status: 400 })

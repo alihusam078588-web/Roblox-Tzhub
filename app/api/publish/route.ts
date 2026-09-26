@@ -61,7 +61,7 @@ export async function POST(request: Request) {
       }),
     ])
     if (typeof body.versionId === 'string' && body.versionId.trim()) {
-      await db.update(scriptVersions).set({ protectedUrl: `protected/${id}.lua`, status: 'active', updatedAt: new Date() }).where(eq(scriptVersions.id, body.versionId.trim()))
+      await db.update(scriptVersions).set({ protectedUrl: `protected/${id}.lua`, status: 'active', buildStatus: 'active', source: body.source, originalSize: body.source.length, obfuscatedSize: result.size, diagnostics: { roundtripOk: result.roundtripOk, seed: result.seed }, obfuscatorVersion: 'tz-hub-obfuscator-v1', updatedAt: new Date() }).where(eq(scriptVersions.id, body.versionId.trim()))
     }
 
     const token = `${exp}.${sign(id, exp)}`
