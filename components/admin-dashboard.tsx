@@ -3,18 +3,20 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { Activity, Ban, Boxes, Code2, Home, Radio, ScrollText, Settings2, Terminal, Users, Webhook } from 'lucide-react'
 
-export const navigation = [
-  { label: 'Overview', href: '/dashboard', icon: '⌂' },
-  { label: 'Services', href: '/dashboard/services', icon: '◈' },
-  { label: 'Scripts', href: '/dashboard/scripts', icon: '◇' },
-  { label: 'Build Full Loader', href: '/dashboard/full-loader', icon: '↗' },
-  { label: 'Executions', href: '/dashboard/executions', icon: '⌁' },
-  { label: 'Live Sessions', href: '/dashboard/sessions', icon: '◉' },
-  { label: 'Blacklist', href: '/dashboard/blacklist', icon: '⊘' },
-  { label: 'Discord Webhooks', href: '/dashboard/webhooks', icon: '◎' },
-  { label: 'Audit Logs', href: '/dashboard/audit-logs', icon: '≡' },
-  { label: 'Settings', href: '/dashboard/settings', icon: '⚙' },
+const navigation = [
+  { label: 'Overview', href: '/dashboard', icon: Home },
+  { label: 'Services', href: '/dashboard/services', icon: Boxes },
+  { label: 'Scripts', href: '/dashboard/scripts', icon: Code2 },
+  { label: 'Build Full Loader', href: '/dashboard/full-loader', icon: Terminal },
+  { label: 'Executions', href: '/dashboard/executions', icon: Activity },
+  { label: 'Users', href: '/dashboard/users', icon: Users },
+  { label: 'Live Sessions', href: '/dashboard/sessions', icon: Radio },
+  { label: 'Blacklist', href: '/dashboard/blacklist', icon: Ban },
+  { label: 'Discord Webhooks', href: '/dashboard/webhooks', icon: Webhook },
+  { label: 'Audit Logs', href: '/dashboard/audit-logs', icon: ScrollText },
+  { label: 'Settings', href: '/dashboard/settings', icon: Settings2 },
 ]
 
 type Row = Record<string, unknown>
@@ -27,7 +29,7 @@ export function AdminShell({ title, eyebrow, children }: { title: string; eyebro
     <div className="mx-auto flex min-h-screen max-w-[1540px]">
       <aside className={`${mobileOpen ? 'fixed inset-y-0 left-0 z-40 flex' : 'hidden'} w-[258px] shrink-0 flex-col border-r border-white/[0.08] bg-[#0b1017] px-4 py-5 md:sticky md:top-0 md:flex md:h-screen`}>
         <div className="flex items-center justify-between px-3 pb-7"><Link href="/dashboard" className="flex items-center gap-3" onClick={() => setMobileOpen(false)}><span className="grid size-9 place-items-center rounded-xl bg-[#c6ff45] text-lg font-black text-[#0b1017]">TZ</span><span><span className="block text-sm font-bold tracking-[0.2em]">TZ HUB</span><span className="block text-[10px] uppercase tracking-[0.18em] text-[#768291]">Control center</span></span></Link><button className="text-[#768291] md:hidden" onClick={() => setMobileOpen(false)} aria-label="Close navigation">×</button></div>
-        <nav className="space-y-1">{navigation.map((item) => <Link key={item.href} href={item.href} onClick={() => setMobileOpen(false)} className={`group flex items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] transition ${active(item.href) ? 'bg-[#c6ff45] font-semibold text-[#10150c]' : 'text-[#91a0ad] hover:bg-white/[0.05] hover:text-white'}`}><span className={`grid size-6 place-items-center rounded-md font-mono text-sm ${active(item.href) ? 'bg-black/10' : 'bg-white/[0.04] text-[#aab6c2]'}`}>{item.icon}</span>{item.label}</Link>)}</nav>
+        <nav className="space-y-1">{navigation.map((item) => <Link key={item.href} href={item.href} onClick={() => setMobileOpen(false)} className={`group flex items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] transition ${active(item.href) ? 'bg-[#c6ff45] font-semibold text-[#10150c]' : 'text-[#91a0ad] hover:bg-white/[0.05] hover:text-white'}`}><span className={`grid size-6 place-items-center rounded-md ${active(item.href) ? 'bg-black/10' : 'bg-white/[0.04] text-[#aab6c2]'}`}><item.icon className="size-3.5" aria-hidden="true" /></span>{item.label}</Link>)}</nav>
         <div className="mt-auto rounded-2xl border border-white/[0.08] bg-white/[0.025] p-4"><div className="mb-3 flex items-center justify-between"><span className="text-[10px] uppercase tracking-[0.2em] text-[#768291]">System status</span><span className="size-2 rounded-full bg-[#c6ff45] shadow-[0_0_12px_#c6ff45]" /></div><p className="text-sm font-medium">All systems operational</p><p className="mt-1 text-xs text-[#768291]">Neon database connected</p></div>
       </aside>
       {mobileOpen && <button className="fixed inset-0 z-30 bg-black/60 md:hidden" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
