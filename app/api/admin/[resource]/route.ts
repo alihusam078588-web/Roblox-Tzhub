@@ -52,7 +52,7 @@ export async function POST(request: Request, context: { params: Promise<{ resour
     } else if (resource === 'scripts') {
       const name = text(body.name, 120), version = text(body.version, 40)
       if (!name || !version) return NextResponse.json({ error: 'Name and version are required.' }, { status: 400 })
-      await db.insert(scriptVersions).values({ id, scriptId: text(body.scriptId, 120) ?? id, gameId: text(body.gameId, 120), name, version, protectedUrl: text(body.protectedUrl, 1000), releaseNotes: text(body.releaseNotes, 1000), status: text(body.status, 30) ?? 'active' })
+      await db.insert(scriptVersions).values({ id, scriptId: text(body.scriptId, 120) ?? id, gameId: text(body.gameId, 120), name, version, source: text(body.source, 8_000_000), protectedUrl: text(body.protectedUrl, 1000), releaseNotes: text(body.releaseNotes, 1000), status: text(body.status, 30) ?? 'draft', buildStatus: 'draft' })
     } else if (resource === 'services') {
       const name = text(body.name, 120)
       if (!name) return NextResponse.json({ error: 'Service name is required.' }, { status: 400 })

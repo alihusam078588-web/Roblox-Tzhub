@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server'
 import { and, eq, gt, isNull, or } from 'drizzle-orm'
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { db } from '@/lib/db'
-import { blacklistEntries, executionEvents, protectedLinks, scriptVersions, supportedGames } from '@/lib/db/schema'
+import { blacklistEntries, executionEvents, protectedLinks, scriptVersions, services, supportedGames } from '@/lib/db/schema'
 
 function validPassword(value: string | null) {
   const secret = process.env.OBFUSCATOR_PASSWORD ?? ''
@@ -38,6 +38,8 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   if (!game) return deny(placeId ? 'Unsupported PlaceId or inactive game.' : 'PlaceId is required.')
   const [version] = await db.select().from(scriptVersions).where(and(eq(scriptVersions.id, link.versionId), eq(scriptVersions.scriptId, link.scriptId ?? ''), eq(scriptVersions.status, 'active'))).limit(1)
   if (!version) return deny('Script version is disabled or unavailable.')
+  const [service] = await db.select().from(services).where(and(eq(services.scriptId, version.scriptId), eq(services.enabled, true))).limit(1)
+  if (service && placeId && Array.isArray(service.placeIds) && !(service.placeIds as unknown[]).includes(placeId)) return deny('This script is not enabled for the current game.')
   const [blocked] = await db.select().from(blacklistEntries).where(and(eq(blacklistEntries.active, true), userId ? eq(blacklistEntries.userId, userId) : eq(blacklistEntries.usernameSnapshot, username ?? ''), or(isNull(blacklistEntries.expiresAt), gt(blacklistEntries.expiresAt, new Date())))).limit(1)
   if (blocked) return deny(blocked.reason)
   await logEvent({ loaderId: id, status: 'allowed', userId, username, placeId, gameName: game.name, scriptId: version.scriptId, version: version.version, ip })

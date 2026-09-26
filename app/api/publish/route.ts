@@ -1,7 +1,7 @@
 import { put } from '@vercel/blob'
 import { NextResponse } from 'next/server'
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
-import { obfuscate, optimizeRegisterSafe } from '@/lib/obfuscator'
+import { analyzeRegisterPressure, obfuscate, optimizeRegisterSafe } from '@/lib/obfuscator'
 import { db } from '@/lib/db'
 import { scriptVersions } from '@/lib/db/schema'
 import { eq } from 'drizzle-orm'
@@ -36,7 +36,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Source script is too large.' }, { status: 413 })
     }
 
-    const optimizedSource = optimizeRegisterSafe(body.source).source
+    const pressure = analyzeRegisterPressure(body.source)
+    if (!pressure.parseOk || pressure.level === 'unsafe') {
+      return NextResponse.json({ error: pressure.message, diagnostics: pressure }, { status: 422 })
+    }
+    const optimization = optimizeRegisterSafe(body.source)
+    const optimizedSource = optimization.source
     const result = obfuscate(optimizedSource, {
       targetSize: Math.max(0, Number(body.targetSize) || 2_000_000),
       chunkSize: Math.max(64, Number(body.chunkSize) || 1024),
@@ -61,7 +66,7 @@ export async function POST(request: Request) {
       }),
     ])
     if (typeof body.versionId === 'string' && body.versionId.trim()) {
-      await db.update(scriptVersions).set({ protectedUrl: `protected/${id}.lua`, status: 'active', buildStatus: 'active', source: body.source, originalSize: body.source.length, obfuscatedSize: result.size, diagnostics: { roundtripOk: result.roundtripOk, seed: result.seed }, obfuscatorVersion: 'tz-hub-obfuscator-v1', updatedAt: new Date() }).where(eq(scriptVersions.id, body.versionId.trim()))
+      await db.update(scriptVersions).set({ protectedUrl: `protected/${id}.lua`, status: 'active', buildStatus: 'active', source: body.source, originalSize: body.source.length, obfuscatedSize: result.size, diagnostics: { roundtripOk: result.roundtripOk, seed: result.seed, pressure, optimization }, obfuscatorVersion: 'tz-hub-obfuscator-v1', updatedAt: new Date() }).where(eq(scriptVersions.id, body.versionId.trim()))
     }
 
     const token = `${exp}.${sign(id, exp)}`

@@ -137,12 +137,15 @@ function luaByteEscape(bytes: number[]): string {
 // ---------------------------------------------------------------------------
 // Main entry point.
 // ---------------------------------------------------------------------------
+export type RegisterPressureLevel = 'safe' | 'warning' | 'high' | 'unsafe'
+
 export interface RegisterPressureReport {
   parseOk: boolean
   parseError?: string
   estimatedLocals: number
   estimatedFunctions: number
   likelyLimitExceeded: boolean
+  level: RegisterPressureLevel
   lines: number[]
   message: string
 }
@@ -152,17 +155,19 @@ export function analyzeRegisterPressure(source: string): RegisterPressureReport 
     const program = parse(source)
     const scopes = analyzeScopes(program, { builtinGlobals: ['game', 'workspace', 'script', 'print', 'task'] })
     const estimatedLocals = [...scopes.bindings.values()].filter((binding) => binding.kind !== 'global').length
-    const estimatedFunctions = scopes.bindings.size
-    const likelyLimitExceeded = estimatedLocals >= 180
+    const estimatedFunctions = [...source.matchAll(/\bfunction\b/g)].length
+    const level: RegisterPressureLevel = estimatedLocals >= 200 ? 'unsafe' : estimatedLocals >= 181 ? 'high' : estimatedLocals >= 161 ? 'warning' : 'safe'
+    const likelyLimitExceeded = level === 'unsafe'
     return {
       parseOk: true,
       estimatedLocals,
       estimatedFunctions,
       likelyLimitExceeded,
+      level,
       lines: [],
-      message: likelyLimitExceeded
-        ? `AST analysis found ${estimatedLocals} lexical locals. No unsafe scope rewrite was applied; closures and callbacks require binding-aware transformation.`
-        : `AST validation passed. ${estimatedLocals} lexical locals were resolved; no likely global register breach was detected.`,
+      message: level === 'unsafe'
+        ? `Build blocked: AST analysis found ${estimatedLocals} lexical locals. No unsafe scope rewrite was applied.`
+        : `AST validation passed. ${estimatedLocals} lexical locals and ${estimatedFunctions} function declarations were resolved. Register pressure: ${level}.`,
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown Luau parse error.'
@@ -172,6 +177,7 @@ export function analyzeRegisterPressure(source: string): RegisterPressureReport 
       estimatedLocals: 0,
       estimatedFunctions: 0,
       likelyLimitExceeded: true,
+      level: 'unsafe',
       lines: [],
       message: `Luau parsing failed, so no source transformation was applied: ${message}`,
     }
