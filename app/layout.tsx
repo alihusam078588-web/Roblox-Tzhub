@@ -7,9 +7,9 @@ const geistSans = Geist({ subsets: ['latin'], variable: '--font-geist-sans' })
 const geistMono = Geist_Mono({ subsets: ['latin'], variable: '--font-geist-mono' })
 
 export const metadata: Metadata = {
-  title: 'Luau VM Obfuscator',
+  title: 'TZ HUB · Luau Distribution Control',
   description:
-    'Heavy VM-layer obfuscation for Luau scripts. Byte-lossless, functionally identical output that stays under the 200-function limit.',
+    'Build, protect, publish, and monitor Luau scripts with TZ HUB.',
   generator: 'v0.app',
 }
 
@@ -24,7 +24,7 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en" className={`light ${geistSans.variable} ${geistMono.variable}`}>
+    <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}>
       <body className="bg-background font-sans antialiased">
         {children}
         {process.env.NODE_ENV === 'production' && <Analytics />}

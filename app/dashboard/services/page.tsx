@@ -1,0 +1,2 @@
+import { ResourceManager } from '@/components/admin-dashboard'
+export default function ServicesPage() { return <ResourceManager resource="games" title="Services" description="Define supported Roblox games and PlaceIds. Assign one script to a Service through the Scripts workflow; global scripts remain unrestricted." columns={['name','placeId','status','description']} fields={['name','placeId','status','description']} /> }
