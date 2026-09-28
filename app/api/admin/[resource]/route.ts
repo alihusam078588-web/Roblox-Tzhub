@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server'
 import { and, desc, eq } from 'drizzle-orm'
 import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
-import { appAdmins, auditLogs, blacklistEntries, executionEvents, protectedLinks, scriptVersions, supportedGames, services } from '@/lib/db/schema'
+import { appAdmins, auditLogs, blacklistEntries, executionEvents, protectedLinks, scriptVersions, supportedGames, services, webhookDestinations, liveSessions } from '@/lib/db/schema'
 
 async function admin() {
   const session = await auth.api.getSession({ headers: await headers() })
@@ -28,6 +28,8 @@ export async function GET(_: Request, context: { params: Promise<{ resource: str
     'audit-logs': db.select().from(auditLogs).orderBy(desc(auditLogs.createdAt)).limit(100),
     users: db.select({ id: appAdmins.id, email: appAdmins.email, displayName: appAdmins.displayName, createdAt: appAdmins.createdAt }).from(appAdmins).orderBy(desc(appAdmins.createdAt)).limit(100),
     services: db.select().from(services).orderBy(desc(services.createdAt)).limit(100),
+    webhooks: db.select().from(webhookDestinations).orderBy(desc(webhookDestinations.createdAt)).limit(100),
+    sessions: db.select().from(liveSessions).orderBy(desc(liveSessions.lastSeenAt)).limit(100),
   } as const
   const query = queries[resource as keyof typeof queries]
   if (!query) return NextResponse.json({ error: 'Unknown resource.' }, { status: 404 })
@@ -58,6 +60,14 @@ export async function POST(request: Request, context: { params: Promise<{ resour
       if (!name) return NextResponse.json({ error: 'Service name is required.' }, { status: 400 })
       const placeIds = Array.isArray(body.placeIds) ? body.placeIds.filter((value: unknown): value is string => typeof value === 'string').map((value) => value.trim()).filter(Boolean).slice(0, 100) : String(body.placeIds ?? '').split(',').map((value) => value.trim()).filter(Boolean).slice(0, 100)
       await db.insert(services).values({ id, name, description: text(body.description, 500), placeIds, scriptId: text(body.scriptId, 120), enabled: body.enabled !== false })
+    } else if (resource === 'webhooks') {
+      const name = text(body.name, 120), url = text(body.url, 2000)
+      let parsed: URL
+      try { parsed = new URL(url ?? '') } catch { return NextResponse.json({ error: 'A valid webhook URL is required.' }, { status: 400 }) }
+      if (parsed.protocol !== 'https:' || !parsed.hostname) return NextResponse.json({ error: 'Webhook URLs must use HTTPS.' }, { status: 400 })
+      const events = Array.isArray(body.events) ? body.events.filter((value: unknown): value is string => typeof value === 'string').slice(0, 30) : []
+      if (!name || !url) return NextResponse.json({ error: 'Name and URL are required.' }, { status: 400 })
+      await db.insert(webhookDestinations).values({ id, name, url, events, enabled: true })
     } else if (resource === 'links') {
       const versionId = text(body.versionId, 120), gameId = text(body.gameId, 120), scriptId = text(body.scriptId, 120)
       if (!versionId || !gameId || !scriptId) return NextResponse.json({ error: 'Version, game, and script are required.' }, { status: 400 })
