@@ -9,7 +9,7 @@ const geistMono = Geist_Mono({ subsets: ['latin'], variable: '--font-geist-mono'
 export const metadata: Metadata = {
   title: 'Luau VM Obfuscator',
   description:
-    'Heavy VM-layer obfuscation for Luau scripts. Byte-lossless, functionally identical output that stays under the 200-function limit.',
+    'Heavy VM-layer obfuscation for Luau scripts. Byte-lossless output with a compact generated loader and no artificial function limit.',
   generator: 'v0.app',
 }
 

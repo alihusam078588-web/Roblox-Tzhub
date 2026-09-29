@@ -369,10 +369,10 @@ export function ObfuscatorPanel() {
               sub={result ? 'source bytes' : undefined}
             />
             <Stat
-              label="VM functions"
+              label="Wrapper functions"
               value={result ? String(result.functionCount) : '—'}
-              sub={result ? '/ 200 limit' : undefined}
-              highlight={result?.functionCount === 0}
+              sub={result ? 'generated loader' : undefined}
+              highlight={result?.functionCount === 1}
             />
             <Stat
               label="Round-trip"
