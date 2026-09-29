@@ -88,13 +88,14 @@ function makeIdentifier(
 }
 
 function decimalEscape(bytes: number[]): string {
-  let out = ""
+  // Joining an array avoids repeated string reallocations for large payloads.
+  const escaped = new Array<string>(bytes.length)
 
-  for (const byte of bytes) {
-    out += `\\${byte}`
+  for (let i = 0; i < bytes.length; i++) {
+    escaped[i] = `\\${bytes[i]}`
   }
 
-  return out
+  return escaped.join("")
 }
 
 function randomHex(
