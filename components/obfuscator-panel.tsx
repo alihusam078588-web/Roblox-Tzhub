@@ -153,9 +153,9 @@ export function ObfuscatorPanel() {
     const LIMIT = 40_000
     return result.code.length > LIMIT
       ? result.code.slice(0, LIMIT) +
-          `\n\n-- [ preview truncated -- full ${formatNumber(
+          ` … [preview truncated — full ${formatNumber(
             result.code.length,
-          )} characters available via Copy / Download ] --\n`
+          )} characters available via Copy / Download]`
       : result.code
   }, [result])
 
@@ -172,16 +172,16 @@ export function ObfuscatorPanel() {
               Luau VM Obfuscator
             </h1>
             <p className="text-sm text-muted-foreground">
-              Heavy VM-layer protection · byte-lossless · under the 200-function limit
+              Heavy VM-layer protection · single-line output · byte-lossless
             </p>
           </div>
         </div>
         <p className="max-w-3xl text-pretty text-sm leading-relaxed text-muted-foreground">
           Your source is encoded byte-for-byte through a rolling key, arithmetic position mixing,
           and a randomized 256-entry S-box, then reconstructed and executed at runtime. The
-          generated wrapper defines{' '}
-          <span className="font-mono text-accent">zero</span> Lua functions of its own — only the
-          functions your original script already declares ever exist.
+          generated wrapper is emitted as a single physical line and keeps the added function
+          count to one wrapper function — only your original script's functions are executed after
+          reconstruction.
         </p>
       </header>
 
@@ -367,8 +367,14 @@ export function ObfuscatorPanel() {
             <Stat
               label="Round-trip"
               value={result ? (result.roundtripOk ? 'Verified' : 'Failed') : '—'}
-              sub={result ? `seed ${result.seed}` : undefined}
-              highlight={result?.roundtripOk}
+              sub={
+                result
+                  ? result.wrapperOk
+                    ? `1 line · seed ${result.seed}`
+                    : `wrapper check failed · seed ${result.seed}`
+                  : undefined
+              }
+              highlight={result?.roundtripOk && result?.wrapperOk}
             />
           </div>
         </section>
@@ -409,8 +415,8 @@ export function ObfuscatorPanel() {
         <code className="rounded bg-muted px-1 py-0.5 font-mono text-accent">load</code>, so the
         target environment must allow it (standard in Luau executors; enable{' '}
         <span className="font-mono">LoadStringEnabled</span> for Roblox server scripts). This is the
-        deliberate trade-off that keeps the wrapper at zero added functions instead of the hundreds
-        a bytecode-VM emitter would generate.
+        deliberate trade-off that keeps the generated layer to one wrapper function instead of the
+        hundreds a bytecode-VM emitter could generate.
       </footer>
     </div>
   )
