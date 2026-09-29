@@ -213,9 +213,10 @@ export function ObfuscatorPanel() {
                   accept=".lua,.luau,text/plain"
                   className="sr-only"
                   onChange={async (e) => {
-                    const file = e.target.files?.[0]
+                    const input = e.currentTarget
+                    const file = input.files?.[0]
                     if (file) setSource(await file.text())
-                    e.currentTarget.value = ''
+                    input.value = ''
                   }}
                 />
               </label>
