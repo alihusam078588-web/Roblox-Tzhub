@@ -207,10 +207,11 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
   }
   const lineComment = () => `--[[ ${commentWords()}; ]]`
 
-  // 6. Assemble the generated program.
+  // 6. Assemble the generated program. The outer closure is deliberately the
+  // first token so the result can be consumed directly as a returned chunk.
   const lines: string[] = []
 
-  lines.push(lineComment())
+  lines.push('return(function(...)')
   lines.push(`-- protected build ${seed}; ${commentWords()};`)
   lines.push(lineComment())
 
@@ -249,6 +250,7 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
   lines.push(`local ${N.ld} = (loadstring or load);`)
   lines.push(`local ${N.fn} = assert(${N.ld}(${N.src}_final, "=protected"));`)
   lines.push(`return ${N.fn}(...);`)
+  lines.push('end)(...)')
 
   // 7. Pad to the requested size with binary-safe block comments woven throughout.
   let code = lines.join('\n') + '\n'
@@ -265,6 +267,11 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
   }
 
   const functionCount = (code.match(/\bfunction\b/g) || []).length
+  const generatedPrefixOk = code.startsWith('return(function(...)')
+  const generatedSuffixOk = code.includes('end)(...)')
+  if (!roundtripOk || !generatedPrefixOk || !generatedSuffixOk) {
+    throw new Error('Generated Lua failed structural or round-trip verification.')
+  }
 
   return {
     code,
