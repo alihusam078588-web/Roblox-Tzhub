@@ -58,7 +58,7 @@ function formatBytes(chars: number) {
 
 export function ObfuscatorPanel() {
   const [source, setSource] = useState(SAMPLE)
-  const [targetMillions, setTargetMillions] = useState(2)
+  const [targetMillions, setTargetMillions] = useState(0)
   const [chunkSize, setChunkSize] = useState(1024)
   const [seedInput, setSeedInput] = useState('')
   const [result, setResult] = useState<ObfuscateResult | null>(null)

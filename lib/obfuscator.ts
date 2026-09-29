@@ -147,7 +147,7 @@ export function obfuscate(
   const targetSize = Math.max(
     0,
     Math.floor(
-      options.targetSize ?? 2_000_000,
+      options.targetSize ?? 0,
     ),
   )
 
