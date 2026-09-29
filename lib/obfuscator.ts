@@ -580,50 +580,42 @@ export function obfuscate(
     "end)(...);",
   )
 
-  let code =
-    lines.join("\n") +
-    "\n"
+  /*
+   * Emit the protected program as ONE physical line.
+   *
+   * Semicolons are already used between generated statements,
+   * so removing generator newlines does not change the Lua/Luau
+   * statement boundaries. No line comments are emitted here.
+   */
+
+  let code = lines.join("")
 
   /*
    * Size padding.
    *
-   * This increases file size but is intentionally
-   * non-executable. It uses random hexadecimal data
-   * instead of readable fake words.
+   * Padding is a block comment so the entire generated output
+   * remains a single physical line and never turns the rest of
+   * the program into a line comment.
    */
 
   if (targetSize > code.length) {
-    const padding: string[] = []
-
-    let remaining =
-      targetSize - code.length
+    let remaining = targetSize - code.length
 
     while (remaining > 0) {
-      const count =
-        Math.min(
-          1024,
-          Math.ceil(
-            remaining / 2,
-          ),
-        )
+      const payloadLength = Math.min(
+        1024,
+        Math.max(1, remaining - 6),
+      )
 
-      const blob =
-        randomHex(
-          rng,
-          Math.min(
-            count,
-            1024,
-          ),
-        )
+      const blob = randomHex(
+        rng,
+        payloadLength,
+      )
 
-      const piece =
-        `--${blob}\n`
-
-      padding.push(piece)
+      const piece = `--[[${blob}]]`
+      code += piece
       remaining -= piece.length
     }
-
-    code += padding.join("")
   }
 
   /*
@@ -636,7 +628,9 @@ export function obfuscate(
     ) &&
     code.includes(
       "end)(...);",
-    )
+    ) &&
+    !code.includes("\n") &&
+    !code.includes("\r")
 
   const functionCount =
     (
