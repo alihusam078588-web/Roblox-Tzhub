@@ -137,14 +137,23 @@ export function ObfuscatorPanel() {
   }, [result, password, source, targetMillions, chunkSize])
 
   const handleDownload = useCallback(() => {
-    if (!result) return
-    const blob = new Blob([result.code], { type: 'text/plain;charset=utf-8' })
+    if (!result || typeof document === 'undefined') return
+
+    const blob = new Blob([result.code], { type: 'application/octet-stream' })
     const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `protected_${result.seed}.lua`
-    a.click()
-    URL.revokeObjectURL(url)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `protected_${result.seed}.lua`
+    link.rel = 'noopener'
+    link.style.display = 'none'
+    document.body.appendChild(link)
+    link.click()
+
+    // Keep the object URL alive until the browser has started the download.
+    window.setTimeout(() => {
+      link.remove()
+      URL.revokeObjectURL(url)
+    }, 1000)
   }, [result])
 
   const preview = useMemo(() => {
