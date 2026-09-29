@@ -1,284 +1,657 @@
-// Luau "VM-layer" obfuscator.
-//
-// Strategy (chosen deliberately to satisfy the constraints):
-//   * The original source is preserved byte-for-byte (UTF-8) so runtime behavior
-//     is identical -- nothing about the original logic is rewritten or parsed.
-//   * Those bytes are pushed through a heavy, position-dependent transform:
-//     a rolling key + arithmetic mixing + a random 256-entry S-box permutation.
-//   * The generated program embeds the inverse S-box, the key table, and the
-//     encoded payload, then reconstructs the source at runtime and hands it to
-//     `loadstring`/`load` for execution.
-//   * Because reconstruction happens in loops (no per-piece helper functions),
-//     the generated wrapper defines ZERO Lua functions of its own. That keeps
-//     the protected script far below the 200-function ceiling -- the only
-//     functions that ever exist at runtime are the ones your original script
-//     already declared.
-//
-// Every transform is verified in-process with a JS mirror of the exact Lua
-// decode math, so a build only succeeds when the round-trip is provably lossless.
-
 export interface ObfuscateOptions {
-  /** Minimum size (characters) of the generated output. */
   targetSize?: number
-  /** Bytes of payload per emitted string chunk. */
   chunkSize?: number
-  /** Optional seed for deterministic, reproducible builds. */
   seed?: number
 }
 
 export interface ObfuscateResult {
   code: string
   size: number
-  /** Number of `function` keyword definitions the obfuscation layer added. */
   functionCount: number
-  /** True when the embedded transform round-trips back to the exact source. */
   roundtripOk: boolean
+  wrapperOk: boolean
   seed: number
   payloadBytes: number
 }
 
-// ---------------------------------------------------------------------------
-// Deterministic PRNG (mulberry32) so a given seed always yields the same build.
-// ---------------------------------------------------------------------------
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0
+
   return () => {
     a |= 0
     a = (a + 0x6d2b79f5) | 0
+
     let t = Math.imul(a ^ (a >>> 15), 1 | a)
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296
   }
 }
 
-const randInt = (rng: () => number, min: number, max: number) =>
-  min + Math.floor(rng() * (max - min + 1))
-
-// ---------------------------------------------------------------------------
-// Identifier generation: English words + underscores + digits, all valid Lua.
-// ---------------------------------------------------------------------------
-const WORDS = [
-  'silver', 'harbor', 'lantern', 'quiet', 'meadow', 'river', 'ember', 'cobalt',
-  'willow', 'marble', 'cinder', 'hollow', 'amber', 'thistle', 'copper', 'onyx',
-  'velvet', 'pebble', 'canyon', 'drifter', 'beacon', 'ripple', 'granite', 'maple',
-  'crimson', 'timber', 'nimbus', 'zephyr', 'lagoon', 'orchard', 'cascade', 'summit',
-  'meridian', 'aurora', 'basalt', 'cedar', 'dahlia', 'fjord', 'glacier', 'juniper',
-  'kelp', 'lattice', 'mosaic', 'nectar', 'obsidian', 'prairie', 'quartz', 'rune',
-  'saffron', 'tundra', 'umbra', 'verdant', 'willowisp', 'xenon', 'yarrow', 'zenith',
-  'anchor', 'bramble', 'clover', 'dusk', 'echo', 'fable', 'grove', 'haven',
-  'iris', 'jasper', 'kismet', 'lumen', 'mirth', 'nova', 'opal', 'plume',
-  'raven', 'sable', 'trove', 'vapor', 'wisp', 'crest', 'delta', 'flare',
-  'gale', 'hearth', 'inlet', 'jade', 'knoll', 'lark', 'mist', 'north',
-  'orbit', 'quill', 'reef', 'shale', 'talon', 'vale', 'warden', 'brook',
-  'coral', 'drake', 'fern', 'gust', 'heron', 'ivory', 'lotus', 'moor',
-]
-
-function makeNamer(rng: () => number) {
-  const used = new Set<string>([
-    'and', 'break', 'do', 'else', 'elseif', 'end', 'false', 'for', 'function',
-    'if', 'in', 'local', 'nil', 'not', 'or', 'repeat', 'return', 'then', 'true',
-    'until', 'while', 'string', 'table', 'loadstring', 'load', 'assert', 'byte',
-    'char', 'concat', 'select', 'pcall', 'error',
-  ])
-  return function next(): string {
-    for (let attempt = 0; attempt < 500; attempt++) {
-      const parts: string[] = []
-      const count = randInt(rng, 2, 3)
-      for (let i = 0; i < count; i++) parts.push(WORDS[randInt(rng, 0, WORDS.length - 1)])
-      let name = parts.join('_')
-      if (rng() < 0.5) name += '_' + randInt(rng, 10, 9999)
-      const lead = '_'.repeat(randInt(rng, 0, 2))
-      const trail = '_'.repeat(randInt(rng, 0, 2))
-      name = lead + name + trail
-      if (!used.has(name)) {
-        used.add(name)
-        return name
-      }
-    }
-    // Fallback guaranteed-unique name.
-    let n = '_fallback_' + used.size
-    used.add(n)
-    return n
-  }
+function randInt(
+  rng: () => number,
+  min: number,
+  max: number,
+): number {
+  return min + Math.floor(rng() * (max - min + 1))
 }
-
-// ---------------------------------------------------------------------------
-// Core transform math. Encode in JS, and mirror the EXACT Lua decode to verify.
-// ---------------------------------------------------------------------------
-const MIX_A = 167
-const MIX_B = 13
 
 function mod256(x: number): number {
   return ((x % 256) + 256) % 256
 }
 
-function buildPermutation(rng: () => number): { P: number[]; invP: number[] } {
-  const P = Array.from({ length: 256 }, (_, i) => i)
+function buildPermutation(
+  rng: () => number,
+): {
+  box: number[]
+  inv: number[]
+} {
+  const box = Array.from(
+    { length: 256 },
+    (_, i) => i,
+  )
+
   for (let i = 255; i > 0; i--) {
     const j = randInt(rng, 0, i)
-    const tmp = P[i]
-    P[i] = P[j]
-    P[j] = tmp
+
+    const temp = box[i]
+    box[i] = box[j]
+    box[j] = temp
   }
-  const invP = new Array<number>(256)
-  for (let i = 0; i < 256; i++) invP[P[i]] = i
-  return { P, invP }
+
+  const inv = new Array<number>(256)
+
+  for (let i = 0; i < 256; i++) {
+    inv[box[i]] = i
+  }
+
+  return {
+    box,
+    inv,
+  }
 }
 
-function luaByteEscape(bytes: number[]): string {
-  // Emit every byte as a \ddd decimal escape -- unambiguous and binary-safe.
-  let out = ''
-  for (let i = 0; i < bytes.length; i++) out += '\\' + bytes[i]
+function makeIdentifier(
+  rng: () => number,
+  used: Set<string>,
+): string {
+  while (true) {
+    const id =
+      `_v${randInt(rng, 0x10000, 0xffffff).toString(16)}_` +
+      `${randInt(rng, 0x1000, 0xffff).toString(16)}`
+
+    if (!used.has(id)) {
+      used.add(id)
+      return id
+    }
+  }
+}
+
+function decimalEscape(bytes: number[]): string {
+  let out = ""
+
+  for (const byte of bytes) {
+    out += `\\${byte}`
+  }
+
   return out
 }
 
-// ---------------------------------------------------------------------------
-// Main entry point.
-// ---------------------------------------------------------------------------
-export function obfuscate(source: string, options: ObfuscateOptions = {}): ObfuscateResult {
-  const targetSize = Math.max(0, options.targetSize ?? 2_000_000)
-  const chunkSize = Math.max(64, options.chunkSize ?? 1024)
-  const seed = (options.seed ?? Math.floor(Math.random() * 0xffffffff)) >>> 0
+function randomHex(
+  rng: () => number,
+  count: number,
+): string {
+  const alphabet = "0123456789abcdef"
+
+  let out = ""
+
+  for (let i = 0; i < count; i++) {
+    out += alphabet[
+      randInt(rng, 0, alphabet.length - 1)
+    ]
+  }
+
+  return out
+}
+
+const HASH_MOD = 1_000_000_007
+const HASH_SEED = 216613626
+
+const MIX_A1 = 167
+const MIX_B1 = 13
+
+const MIX_A2 = 73
+const MIX_B2 = 91
+
+function hashBytes(bytes: number[]): number {
+  let hash = HASH_SEED
+
+  for (let i = 0; i < bytes.length; i++) {
+    hash =
+      (
+        hash * 257 +
+        bytes[i] +
+        i +
+        1
+      ) % HASH_MOD
+  }
+
+  return hash
+}
+
+export function obfuscate(
+  source: string,
+  options: ObfuscateOptions = {},
+): ObfuscateResult {
+  const targetSize = Math.max(
+    0,
+    Math.floor(
+      options.targetSize ?? 2_000_000,
+    ),
+  )
+
+  const chunkSize = Math.max(
+    64,
+    Math.floor(
+      options.chunkSize ?? 768,
+    ),
+  )
+
+  const seed = (
+    options.seed ??
+    Math.floor(
+      Math.random() * 0x1_0000_0000,
+    )
+  ) >>> 0
 
   const rng = mulberry32(seed)
-  const namer = makeNamer(rng)
 
-  // 1. Original source -> UTF-8 bytes (lossless).
-  const srcBytes = Array.from(new TextEncoder().encode(source))
+  const used = new Set<string>()
 
-  // 2. Build the S-box + key material.
-  const { P, invP } = buildPermutation(rng)
-  const keyLen = randInt(rng, 32, 64)
-  const key = Array.from({ length: keyLen }, () => randInt(rng, 0, 255))
-
-  // 3. Encode every byte with a position-dependent transform.
-  const encoded = new Array<number>(srcBytes.length)
-  for (let idx = 0; idx < srcBytes.length; idx++) {
-    const i1 = idx + 1 // Lua uses 1-based indexing
-    const b = srcBytes[idx]
-    const kw = key[idx % keyLen]
-    const mix = mod256(i1 * MIX_A + MIX_B)
-    const t = mod256(b + kw + mix)
-    encoded[idx] = P[t]
-  }
-
-  // 4. Verify the round-trip using a mirror of the Lua decode math.
-  let roundtripOk = true
-  for (let idx = 0; idx < encoded.length; idx++) {
-    const i1 = idx + 1
-    const e = encoded[idx]
-    const t = invP[e]
-    const kw = key[idx % keyLen]
-    const mix = mod256(i1 * MIX_A + MIX_B)
-    const b = mod256(t - kw - mix)
-    if (b !== srcBytes[idx]) {
-      roundtripOk = false
-      break
-    }
-  }
-
-  // 5. Randomized identifiers for the whole VM layer.
   const N = {
-    ip: namer(), // inverse permutation table
-    key: namer(),
-    kl: namer(), // key length
-    data: namer(), // payload accumulator table
-    src: namer(), // reconstructed source
-    out: namer(), // output byte table
-    loop: namer(), // loop counter
-    e: namer(), // encoded byte
-    t: namer(), // pre-image
-    kw: namer(), // key value
-    mix: namer(), // position mix
-    ld: namer(), // loadstring alias
-    fn: namer(), // loaded chunk
+    p1: makeIdentifier(rng, used),
+    p2: makeIdentifier(rng, used),
+
+    k1: makeIdentifier(rng, used),
+    k2: makeIdentifier(rng, used),
+
+    data: makeIdentifier(rng, used),
+    src: makeIdentifier(rng, used),
+    out: makeIdentifier(rng, used),
+
+    i: makeIdentifier(rng, used),
+    x: makeIdentifier(rng, used),
+    y: makeIdentifier(rng, used),
+    z: makeIdentifier(rng, used),
+
+    hash: makeIdentifier(rng, used),
+
+    load: makeIdentifier(rng, used),
+    fn: makeIdentifier(rng, used),
+    err: makeIdentifier(rng, used),
   }
 
-  const commentWords = () => {
-    const parts: string[] = []
-    const count = randInt(rng, 4, 10)
-    for (let i = 0; i < count; i++) {
-      let w = WORDS[randInt(rng, 0, WORDS.length - 1)]
-      if (rng() < 0.4) w += '_' + WORDS[randInt(rng, 0, WORDS.length - 1)]
-      if (rng() < 0.3) w += '_' + randInt(rng, 0, 99999)
-      parts.push(w)
-    }
-    return parts.join('; ')
-  }
-  const lineComment = () => `--[[ ${commentWords()}; ]]`
+  const sourceBytes = Array.from(
+    new TextEncoder().encode(source),
+  )
 
-  // 6. Assemble the generated program. The outer closure is deliberately the
-  // first token so the result can be consumed directly as a returned chunk.
+  const first = buildPermutation(rng)
+  const second = buildPermutation(rng)
+
+  const keyLength1 = randInt(
+    rng,
+    48,
+    64,
+  )
+
+  const keyLength2 = randInt(
+    rng,
+    48,
+    64,
+  )
+
+  const key1 = Array.from(
+    { length: keyLength1 },
+    () => randInt(rng, 0, 255),
+  )
+
+  const key2 = Array.from(
+    { length: keyLength2 },
+    () => randInt(rng, 0, 255),
+  )
+
+  /*
+   * Layer 1:
+   *
+   * source byte
+   * -> position mix
+   * -> key
+   * -> permutation
+   *
+   * Layer 2:
+   *
+   * result of layer 1
+   * -> second position mix
+   * -> second key
+   * -> second permutation
+   */
+
+  const encoded = new Array<number>(
+    sourceBytes.length,
+  )
+
+  for (
+    let index = 0;
+    index < sourceBytes.length;
+    index++
+  ) {
+    const position = index + 1
+
+    const firstValue = mod256(
+      sourceBytes[index] +
+      key1[index % keyLength1] +
+      mod256(
+        position * MIX_A1 +
+        MIX_B1,
+      ),
+    )
+
+    const firstMapped =
+      first.box[firstValue]
+
+    const secondValue = mod256(
+      firstMapped +
+      key2[index % keyLength2] +
+      mod256(
+        position * MIX_A2 +
+        MIX_B2,
+      ),
+    )
+
+    encoded[index] =
+      second.box[secondValue]
+  }
+
+  /*
+   * Internal build verification.
+   */
+
+  const decoded = new Array<number>(
+    encoded.length,
+  )
+
+  for (
+    let index = 0;
+    index < encoded.length;
+    index++
+  ) {
+    const position = index + 1
+
+    const secondMapped =
+      second.inv[encoded[index]]
+
+    const firstValue = mod256(
+      secondMapped -
+      key2[index % keyLength2] -
+      mod256(
+        position * MIX_A2 +
+        MIX_B2,
+      ),
+    )
+
+    const firstMapped =
+      first.inv[firstValue]
+
+    decoded[index] = mod256(
+      firstMapped -
+      key1[index % keyLength1] -
+      mod256(
+        position * MIX_A1 +
+        MIX_B1,
+      ),
+    )
+  }
+
+  const roundtripOk =
+    decoded.length === sourceBytes.length &&
+    decoded.every(
+      (value, index) =>
+        value === sourceBytes[index],
+    )
+
+  if (!roundtripOk) {
+    throw new Error(
+      "Internal obfuscation round-trip failed",
+    )
+  }
+
+  const expectedHash =
+    hashBytes(sourceBytes)
+
+  /*
+   * Split payload into chunks.
+   */
+
+  const chunks: string[] = []
+
+  for (
+    let offset = 0;
+    offset < encoded.length;
+    offset += chunkSize
+  ) {
+    chunks.push(
+      decimalEscape(
+        encoded.slice(
+          offset,
+          offset + chunkSize,
+        ),
+      ),
+    )
+  }
+
+  if (chunks.length === 0) {
+    chunks.push("")
+  }
+
+  /*
+   * Randomize the order in which assignments
+   * appear in the generated source.
+   *
+   * Their numeric indexes remain correct,
+   * so table.concat() still restores order.
+   */
+
+  const order = Array.from(
+    {
+      length: chunks.length,
+    },
+    (_, index) => index,
+  )
+
+  for (
+    let i = order.length - 1;
+    i > 0;
+    i--
+  ) {
+    const j = randInt(rng, 0, i)
+
+    const temp = order[i]
+    order[i] = order[j]
+    order[j] = temp
+  }
+
   const lines: string[] = []
 
-  lines.push('return(function(...)')
-  lines.push(`-- protected build ${seed}; ${commentWords()};`)
-  lines.push(lineComment())
+  /*
+   * Required prefix.
+   */
 
-  // Inverse S-box: values invP[0..255] in order (decode reads IP[e + 1]).
-  lines.push(`local ${N.ip} = {${invP.join(',')}};`)
-  lines.push(lineComment())
-  lines.push(`local ${N.key} = {${key.join(',')}};`)
-  lines.push(`local ${N.kl} = #${N.key};`)
-  lines.push(`local ${N.data} = {};`)
+  lines.push(
+    "return(function(...)",
+  )
 
-  // Payload chunks: one local table, unlimited inserts -> respects Luau's
-  // 200-local-per-scope limit.
-  let commentEvery = 0
-  for (let off = 0; off < encoded.length; off += chunkSize) {
-    const chunk = encoded.slice(off, off + chunkSize)
-    lines.push(`${N.data}[#${N.data} + 1] = "${luaByteEscape(chunk)}";`)
-    if (++commentEvery % 5 === 0) lines.push(lineComment())
+  /*
+   * Inverse S-box tables.
+   */
+
+  lines.push(
+    `local ${N.p1}={` +
+    `${first.inv.join(",")};};`,
+  )
+
+  lines.push(
+    `local ${N.p2}={` +
+    `${second.inv.join(",")};};`,
+  )
+
+  /*
+   * Keys.
+   */
+
+  lines.push(
+    `local ${N.k1}={` +
+    `${key1.join(",")};};`,
+  )
+
+  lines.push(
+    `local ${N.k2}={` +
+    `${key2.join(",")};};`,
+  )
+
+  /*
+   * Payload table.
+   */
+
+  lines.push(
+    `local ${N.data}={};`,
+  )
+
+  /*
+   * Emit chunks in shuffled source order.
+   */
+
+  for (const index of order) {
+    lines.push(
+      `${N.data}[${index + 1}]=` +
+      `"${chunks[index]}";`,
+    )
   }
-  if (encoded.length === 0) {
-    lines.push(`${N.data}[#${N.data} + 1] = "";`)
-  }
 
-  // Reconstruct + decode + execute. All declarations inside the loop body are
-  // per-iteration scoped, so no local accumulates and no helper function exists.
-  lines.push(`local ${N.src} = table.concat(${N.data});`)
-  lines.push(`local ${N.out} = {};`)
-  lines.push(`for ${N.loop} = 1, #${N.src} do`)
-  lines.push(`  local ${N.e} = string.byte(${N.src}, ${N.loop});`)
-  lines.push(`  local ${N.t} = ${N.ip}[${N.e} + 1];`)
-  lines.push(`  local ${N.kw} = ${N.key}[((${N.loop} - 1) % ${N.kl}) + 1];`)
-  lines.push(`  local ${N.mix} = (${N.loop} * ${MIX_A} + ${MIX_B}) % 256;`)
-  lines.push(`  ${N.out}[${N.loop}] = string.char((${N.t} - ${N.kw} - ${N.mix}) % 256);`)
-  lines.push(`end;`)
-  lines.push(lineComment())
-  lines.push(`local ${N.src}_final = table.concat(${N.out});`)
-  lines.push(`local ${N.ld} = (loadstring or load);`)
-  lines.push(`local ${N.fn} = assert(${N.ld}(${N.src}_final, "=protected"));`)
-  lines.push(`return ${N.fn}(...);`)
-  lines.push('end)(...)')
+  /*
+   * Join encoded bytes.
+   */
 
-  // 7. Pad to the requested size with binary-safe block comments woven throughout.
-  let code = lines.join('\n') + '\n'
-  if (code.length < targetSize) {
-    const pad: string[] = []
-    let remaining = targetSize - code.length
+  lines.push(
+    `local ${N.src}=table.concat(${N.data});`,
+  )
+
+  /*
+   * Output table.
+   */
+
+  lines.push(
+    `local ${N.out}={};`,
+  )
+
+  /*
+   * Integrity hash.
+   */
+
+  lines.push(
+    `local ${N.hash}=${HASH_SEED};`,
+  )
+
+  /*
+   * Runtime decode.
+   */
+
+  lines.push(
+    `for ${N.i}=1,#${N.src} do`,
+  )
+
+  lines.push(
+    `  local ${N.x}=` +
+    `string.byte(${N.src},${N.i});`,
+  )
+
+  /*
+   * Reverse layer 2.
+   */
+
+  lines.push(
+    `  local ${N.y}=` +
+    `${N.p2}[${N.x}+1];`,
+  )
+
+  lines.push(
+    `  ${N.y}=` +
+    `(${N.y}-` +
+    `${N.k2}[((${N.i}-1)%#${N.k2})+1]-` +
+    `(((${N.i}*${MIX_A2}+${MIX_B2})%256))` +
+    `)%256;`,
+  )
+
+  /*
+   * Reverse layer 1.
+   */
+
+  lines.push(
+    `  local ${N.z}=` +
+    `${N.p1}[${N.y}+1];`,
+  )
+
+  lines.push(
+    `  ${N.z}=` +
+    `(${N.z}-` +
+    `${N.k1}[((${N.i}-1)%#${N.k1})+1]-` +
+    `(((${N.i}*${MIX_A1}+${MIX_B1})%256))` +
+    `)%256;`,
+  )
+
+  /*
+   * Convert the recovered byte into
+   * a string character.
+   */
+
+  lines.push(
+    `  ${N.out}[${N.i}]=` +
+    `string.char(${N.z});`,
+  )
+
+  /*
+   * Runtime integrity verification.
+   */
+
+  lines.push(
+    `  ${N.hash}=` +
+    `(${N.hash}*257+${N.z}+${N.i})` +
+    `%${HASH_MOD};`,
+  )
+
+  lines.push("end;")
+
+  lines.push(
+    `if ${N.hash}~=${expectedHash} then ` +
+    `error("integrity check failed",0); ` +
+    `end;`,
+  )
+
+  /*
+   * Reconstruct original source.
+   */
+
+  lines.push(
+    `local ${N.src}_final=` +
+    `table.concat(${N.out});`,
+  )
+
+  /*
+   * Load the reconstructed source.
+   */
+
+  lines.push(
+    `local ${N.load}=loadstring or load;`,
+  )
+
+  lines.push(
+    `local ${N.fn},${N.err}=` +
+    `${N.load}(${N.src}_final,"=protected");`,
+  )
+
+  lines.push(
+    `if not ${N.fn} then ` +
+    `error(${N.err},0); ` +
+    `end;`,
+  )
+
+  /*
+   * Forward the original varargs.
+   */
+
+  lines.push(
+    `return ${N.fn}(...);`,
+  )
+
+  /*
+   * Close the required wrapper.
+   */
+
+  lines.push(
+    "end)(...);",
+  )
+
+  let code =
+    lines.join("\n") +
+    "\n"
+
+  /*
+   * Size padding.
+   *
+   * This increases file size but is intentionally
+   * non-executable. It uses random hexadecimal data
+   * instead of readable fake words.
+   */
+
+  if (targetSize > code.length) {
+    const padding: string[] = []
+
+    let remaining =
+      targetSize - code.length
+
     while (remaining > 0) {
-      const block = lineComment() + '\n'
-      pad.push(block)
-      remaining -= block.length
+      const count =
+        Math.min(
+          1024,
+          Math.ceil(
+            remaining / 2,
+          ),
+        )
+
+      const blob =
+        randomHex(
+          rng,
+          Math.min(
+            count,
+            1024,
+          ),
+        )
+
+      const piece =
+        `--${blob}\n`
+
+      padding.push(piece)
+      remaining -= piece.length
     }
-    // Splice padding into the payload region so it appears "throughout".
-    code = code + pad.join('')
+
+    code += padding.join("")
   }
 
-  const functionCount = (code.match(/\bfunction\b/g) || []).length
-  const generatedPrefixOk = code.startsWith('return(function(...)')
-  const generatedSuffixOk = code.includes('end)(...)')
-  if (!roundtripOk || !generatedPrefixOk || !generatedSuffixOk) {
-    throw new Error('Generated Lua failed structural or round-trip verification.')
-  }
+  /*
+   * Generator-level checks.
+   */
+
+  const wrapperOk =
+    code.startsWith(
+      "return(function(...)",
+    ) &&
+    code.includes(
+      "end)(...);",
+    )
+
+  const functionCount =
+    (
+      code.match(
+        /\bfunction\s*\(/g,
+      ) || []
+    ).length
 
   return {
     code,
     size: code.length,
     functionCount,
     roundtripOk,
+    wrapperOk,
     seed,
-    payloadBytes: srcBytes.length,
+    payloadBytes: sourceBytes.length,
   }
 }
