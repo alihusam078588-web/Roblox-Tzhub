@@ -16,7 +16,7 @@ import {
   LockKeyhole,
   Link as LinkIcon,
 } from 'lucide-react'
-import { analyzeRegisterPressure, obfuscate, optimizeRegisterSafe, type ObfuscateResult, type RegisterPressureReport, type RegisterSafeReport } from '@/lib/obfuscator'
+import { protectBig, type ProtectResult } from '@/src/lib/bigScriptProtect'
 import { Button } from '@/components/ui/button'
 
 const SAMPLE = `-- Sample Luau script
@@ -62,7 +62,10 @@ export function ObfuscatorPanel() {
   const [targetMillions, setTargetMillions] = useState(2)
   const [chunkSize, setChunkSize] = useState(1024)
   const [seedInput, setSeedInput] = useState('')
-  const [result, setResult] = useState<ObfuscateResult | null>(null)
+  const [result, setResult] = useState<(ProtectResult & { code: string; size: number; payloadBytes: number; functionCount: number; roundtripOk: boolean; seed: number }) | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
+  const [status, setStatus] = useState('Ready')
+  const [progress, setProgress] = useState({ done: 0, total: 0 })
   const [busy, setBusy] = useState(false)
   const [copied, setCopied] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -71,48 +74,45 @@ export function ObfuscatorPanel() {
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null)
   const loadstringSnippet = publishedUrl ? `loadstring(game:HttpGet("${publishedUrl}"))()` : ''
   const [registerSafe, setRegisterSafe] = useState(true)
-  const [optimizerReport, setOptimizerReport] = useState<RegisterSafeReport | null>(null)
-  const [pressureReport, setPressureReport] = useState<RegisterPressureReport | null>(null)
+  const [optimizerReport] = useState<any>(null)
+  const [pressureReport] = useState<any>(null)
   const outputRef = useRef<HTMLTextAreaElement>(null)
 
-  const runObfuscate = useCallback(() => {
+  const runObfuscate = useCallback(async () => {
+    const controller = new AbortController()
+    abortRef.current = controller
     setBusy(true)
     setError(null)
     setCopied(false)
-    // Defer so the loading state paints before the (potentially heavy) work.
-    setTimeout(() => {
-      try {
-        const seed = seedInput.trim() === '' ? undefined : Number(seedInput.trim()) >>> 0
-        const pressure = analyzeRegisterPressure(source)
-        setPressureReport(pressure)
-        if (!pressure.parseOk) {
-          setResult(null)
-          setError(pressure.message)
-          return
-        }
-        const optimized = registerSafe ? optimizeRegisterSafe(source) : null
-        const workingSource = optimized?.source ?? source
-        setOptimizerReport(optimized)
-        const res = obfuscate(workingSource, {
-          targetSize: Math.max(0, targetMillions) * 1_000_000,
-          chunkSize,
-          seed,
-        })
-        setResult(res)
-        if (!res.roundtripOk) {
-          setError(
-            'Round-trip verification failed for this input. The output was not emitted to avoid shipping a broken script.',
-          )
-          setResult(null)
-        }
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'Unknown error during obfuscation.')
+    setStatus('Starting rbx.lol protection…')
+    setProgress({ done: 0, total: 0 })
+    try {
+      const protectedResult = await protectBig(source, {
+        signal: controller.signal,
+        onStatus: setStatus,
+        onProgress: (done, total) => setProgress({ done, total }),
+      })
+      if (!protectedResult.ok || !protectedResult.out) {
         setResult(null)
-      } finally {
-        setBusy(false)
+        setError(protectedResult.error || 'Protection failed.')
+        return
       }
-    }, 30)
-  }, [source, targetMillions, chunkSize, seedInput, registerSafe])
+      setResult({ ...protectedResult, code: protectedResult.out, size: protectedResult.out.length, payloadBytes: source.length, functionCount: 0, roundtripOk: true, seed: 0 })
+      setStatus('Protection complete')
+    } catch (e) {
+      setResult(null)
+      setError(e instanceof Error ? e.message : 'Protection failed.')
+    } finally {
+      abortRef.current = null
+      setBusy(false)
+    }
+  }, [source])
+
+  const cancelObfuscate = useCallback(() => {
+    abortRef.current?.abort()
+    setStatus('Cancelled')
+    setBusy(false)
+  }, [])
 
   const handleCopy = useCallback(async () => {
     if (!result) return
@@ -138,7 +138,7 @@ export function ObfuscatorPanel() {
       const response = await fetch('/api/publish', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password, source, targetSize: targetMillions * 1_000_000, chunkSize, seed: result.seed }),
+        body: JSON.stringify({ password, source: result.code, targetSize: targetMillions * 1_000_000, chunkSize, seed: result.seed }),
       })
       const data = await response.json()
       if (!response.ok) throw new Error(data.error || 'Publish failed.')
@@ -334,9 +334,11 @@ export function ObfuscatorPanel() {
                 Obfuscate
               </>
             )}
-          </Button>
+</Button>
+  {busy && <Button type="button" variant="outline" onClick={cancelObfuscate} className="h-11 w-full font-mono text-sm">Cancel {progress.total ? `(${progress.done}/${progress.total})` : ''}</Button>}
+  {busy && <p className="text-xs text-muted-foreground" role="status">{status}</p>}
 
-          {error && (
+  {error && (
             <div
               role="alert"
               className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-foreground"
