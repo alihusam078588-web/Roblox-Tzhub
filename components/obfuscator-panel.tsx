@@ -16,6 +16,7 @@ import {
   Link as LinkIcon,
 } from 'lucide-react'
 import { obfuscate, type ObfuscateResult } from '@/lib/obfuscator'
+import { protectBig, type ProtectStats } from '@/lib/bigScriptProtect'
 import { Button } from '@/components/ui/button'
 
 const SAMPLE = `-- Sample Luau script
@@ -68,12 +69,36 @@ export function ObfuscatorPanel() {
   const [password, setPassword] = useState('')
   const [publishing, setPublishing] = useState(false)
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null)
+  const [engine, setEngine] = useState<'rbx' | 'built-in'>('rbx')
+  const [progress, setProgress] = useState(0)
+  const [status, setStatus] = useState('')
+  const [remoteStats, setRemoteStats] = useState<ProtectStats | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
   const outputRef = useRef<HTMLTextAreaElement>(null)
 
-  const runObfuscate = useCallback(() => {
+  const runObfuscate = useCallback(async () => {
     setBusy(true)
     setError(null)
     setCopied(false)
+    setResult(null)
+    setRemoteStats(null)
+    setProgress(0)
+    if (engine === 'rbx') {
+      const controller = new AbortController()
+      abortRef.current = controller
+      const res = await protectBig(source, {
+        signal: controller.signal,
+        onStatus: setStatus,
+        onProgress: setProgress,
+      })
+      abortRef.current = null
+      if (res.ok) {
+        setRemoteStats(res.stats)
+        setResult({ code: res.out, size: res.out.length, payloadBytes: res.stats.inputBytes, functionCount: 0, roundtripOk: true, wrapperOk: true, seed: 0 })
+      } else setError(res.error ?? 'Protection failed.')
+      setBusy(false)
+      return
+    }
     // Defer so the loading state paints before the (potentially heavy) work.
     setTimeout(() => {
       try {
@@ -97,7 +122,11 @@ export function ObfuscatorPanel() {
         setBusy(false)
       }
     }, 30)
-  }, [source, targetMillions, chunkSize, seedInput])
+  }, [engine, source, targetMillions, chunkSize, seedInput])
+
+  const cancelProtection = useCallback(() => {
+    abortRef.current?.abort()
+  }, [])
 
   const handleCopy = useCallback(async () => {
     if (!result) return
@@ -240,6 +269,20 @@ export function ObfuscatorPanel() {
           />
 
           {/* Controls */}
+          <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-card/60 p-4">
+            <label htmlFor="engine" className="text-xs font-medium text-muted-foreground">Protection engine</label>
+            <select id="engine" value={engine} onChange={(e) => setEngine(e.target.value as 'rbx' | 'built-in')} className="rounded-md border border-border bg-background px-3 py-2 font-mono text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40">
+              <option value="rbx">rbx.lol (supports big scripts)</option>
+              <option value="built-in">Built-in</option>
+            </select>
+          </div>
+          {engine === 'rbx' && busy && (
+            <div className="rounded-lg border border-primary/30 bg-primary/5 p-4" role="status">
+              <div className="mb-2 flex items-center justify-between gap-3 text-xs text-muted-foreground"><span>{status || 'Starting…'}</span><span className="font-mono">{Math.round(progress * 100)}%</span></div>
+              <div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${progress * 100}%` }} /></div>
+              <Button type="button" variant="outline" onClick={cancelProtection} className="mt-3 h-9 w-full sm:w-auto">Cancel</Button>
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-4 rounded-lg border border-border bg-card/60 p-4 sm:grid-cols-3">
             <div className="flex flex-col gap-1.5">
               <label htmlFor="target" className="text-xs font-medium text-muted-foreground">
@@ -357,6 +400,12 @@ export function ObfuscatorPanel() {
           />
 
           {/* Stats */}
+          {remoteStats && <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Stat label="Input" value={formatBytes(remoteStats.inputBytes)} />
+            <Stat label="Compacted" value={formatBytes(remoteStats.compactedBytes)} />
+            <Stat label="Pieces" value={formatNumber(remoteStats.pieces)} />
+            <Stat label="Requests" value={formatNumber(remoteStats.requests)} />
+          </div>}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Stat
               label="Output size"
