@@ -8,6 +8,16 @@ export interface ObfuscateOptions {
   seed?: number
   renameLocals?: boolean
   minify?: boolean
+  targetSize?: number
+  chunkSize?: number
+}
+
+export interface SpillReport {
+  attempted: boolean
+  applied: boolean
+  spilledBindings: number
+  unsupported: boolean
+  message: string
 }
 
 export interface RegisterPressureReport {
@@ -31,7 +41,8 @@ export interface ObfuscateResult {
   payloadBytes: number
   pressure: RegisterPressureReport
   warnings: string[]
-  verification: { syntax: boolean; compiler: 'not-configured'; behavior: 'not-executed' }
+  spill: SpillReport
+  verification: { syntax: boolean; compiler: 'not-configured' | 'unavailable' | 'passed' | 'failed'; behavior: 'not-executed' | 'passed' | 'failed' }
 }
 
 const BUILTINS = ['game', 'workspace', 'script', 'Instance', 'Vector3', 'Enum', 'task', 'print', 'pairs', 'ipairs', 'type', 'typeof', 'tostring', 'tonumber', 'string', 'table', 'math', 'coroutine', 'select', 'unpack', 'require', 'error', 'warn', 'assert', 'pcall', 'xpcall', 'next', 'setmetatable', 'getmetatable']
@@ -125,10 +136,16 @@ function preserveDirectives(source: string): string {
   return directives.length ? directives.join('\n') + '\n' : ''
 }
 
+export function spillExcessLocals(_program: any, pressure: RegisterPressureReport): SpillReport {
+  if (!pressure.likelyLimitExceeded) return { attempted: false, applied: false, spilledBindings: 0, unsupported: false, message: 'Local-limit repair was not needed.' }
+  return { attempted: true, applied: false, spilledBindings: 0, unsupported: true, message: 'Storage spilling is unsupported until binding-preserving declaration, assignment, closure, loop, vararg, and multi-return rewrites are compiler-tested.' }
+}
+
 export function obfuscate(source: string, options: ObfuscateOptions = {}): ObfuscateResult {
   const pressure = analyzeRegisterPressure(source)
   if (!pressure.parseOk) throw new Error(pressure.message)
   const program: any = parse(source)
+  const spill = spillExcessLocals(program, pressure)
   const analysis: any = analyzeScopes(program, { builtinGlobals: BUILTINS })
   const preset = options.preset ?? 'balanced'
   const renamed = options.renameLocals ?? preset !== 'light' ? renameBindings(program, analysis) : 0
@@ -136,8 +153,8 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
   const code = preserveDirectives(source) + rendered + '\n'
   const verification = (() => { try { parse(code); return true } catch { return false } })()
   if (!verification) throw new Error('Generated output failed syntax validation.')
-  const warnings = [...(pressure.level === 'high' ? ['High register pressure detected; no unverified local-storage rewrite was applied.'] : []), ...(pressure.level === 'unsafe' ? ['This input exceeds the conservative 200-local threshold. Output is not claimed to repair compiler register allocation.'] : []), ...(preset === 'maximum' ? ['Maximum selects stronger safe renaming only; VM protection and constant encryption are intentionally unsupported.'] : []), `${renamed} lexical bindings renamed with scope analysis.`]
-  return { code, size: code.length, functionCount: pressure.estimatedFunctions, roundtripOk: true, seed: options.seed ?? 0, payloadBytes: new TextEncoder().encode(source).length, pressure, warnings, verification: { syntax: true, compiler: 'not-configured', behavior: 'not-executed' } }
+  const warnings = [...(spill.unsupported ? [spill.message] : []), ...(pressure.level === 'high' ? ['High register pressure detected; no unverified local-storage rewrite was applied.'] : []), ...(pressure.level === 'unsafe' ? ['This input exceeds the conservative 200-local threshold. Output is not claimed to repair compiler register allocation.'] : []), ...(preset === 'maximum' ? ['Maximum selects stronger safe renaming only; VM protection and constant encryption are intentionally unsupported.'] : []), `${renamed} lexical bindings renamed with scope analysis.`]
+  return { code, size: code.length, functionCount: pressure.estimatedFunctions, roundtripOk: true, seed: options.seed ?? 0, payloadBytes: new TextEncoder().encode(source).length, pressure, spill, warnings, verification: { syntax: true, compiler: 'unavailable', behavior: 'not-executed' } }
 }
 
 export function optimizeRegisterSafe(source: string) { return { source, serviceLookupsFound: 0, serviceLookupsRewritten: 0, playerGuiLookupsFound: 0, playerGuiLookupsRewritten: 0, skippedWindUI: 0, warnings: ['Safe optimizer performs no storage rewrite without a verified Luau compiler.'] } }

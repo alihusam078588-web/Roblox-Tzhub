@@ -1,0 +1,30 @@
+name: Luau compiler verification
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  luau:
+    runs-on: ubuntu-latest
+    env:
+      LUAU_VERSION: 0.693
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: luau-lang/luau
+          ref: ${{ env.LUAU_VERSION }}
+          path: .tmp/luau
+      - uses: lukka/get-cmake@v3.31.6
+      - name: Build official Luau CLI
+        run: cmake -S .tmp/luau -B .tmp/luau-build -DCMAKE_BUILD_TYPE=Release -DCMAKE_UNITY_BUILD=ON && cmake --build .tmp/luau-build --target luau -j2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.3.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: LUAU_BIN=.tmp/luau-build/luau pnpm verify:regression

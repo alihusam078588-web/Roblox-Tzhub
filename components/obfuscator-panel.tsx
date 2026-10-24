@@ -258,7 +258,7 @@ The engine parses Luau into an AST, analyzes lexical bindings, renames only prov
         <span>WindUI skipped: {optimizerReport.skippedWindUI}</span>
       </div>
     )}
-    {optimizerReport?.warnings.map((warning) => <p key={warning} className="mt-2 text-xs text-muted-foreground">{warning}</p>)}
+    {optimizerReport?.warnings.map((warning: string) => <p key={warning} className="mt-2 text-xs text-muted-foreground">{warning}</p>)}
     {pressureReport && (
       <div className={`mt-3 rounded-md border p-3 text-xs ${pressureReport.likelyLimitExceeded ? 'border-destructive/40 bg-destructive/10 text-destructive' : 'border-border bg-background text-muted-foreground'}`}>
         <p className="font-medium">Register check: {pressureReport.likelyLimitExceeded ? 'high risk' : 'no likely limit breach detected'}</p>

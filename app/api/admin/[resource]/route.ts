@@ -58,7 +58,7 @@ export async function POST(request: Request, context: { params: Promise<{ resour
     } else if (resource === 'services') {
       const name = text(body.name, 120)
       if (!name) return NextResponse.json({ error: 'Service name is required.' }, { status: 400 })
-      const placeIds = Array.isArray(body.placeIds) ? body.placeIds.filter((value: unknown): value is string => typeof value === 'string').map((value) => value.trim()).filter(Boolean).slice(0, 100) : String(body.placeIds ?? '').split(',').map((value) => value.trim()).filter(Boolean).slice(0, 100)
+      const placeIds = Array.isArray(body.placeIds) ? body.placeIds.filter((value: unknown): value is string => typeof value === 'string').map((value: string) => value.trim()).filter(Boolean).slice(0, 100) : String(body.placeIds ?? '').split(',').map((value: string) => value.trim()).filter(Boolean).slice(0, 100)
       await db.insert(services).values({ id, name, description: text(body.description, 500), placeIds, scriptId: text(body.scriptId, 120), enabled: body.enabled !== false })
     } else if (resource === 'webhooks') {
       const name = text(body.name, 120), url = text(body.url, 2000)
