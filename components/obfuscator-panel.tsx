@@ -16,7 +16,7 @@ import {
   LockKeyhole,
   Link as LinkIcon,
 } from 'lucide-react'
-import { protectBig, type ProtectResult } from '@/src/lib/bigScriptProtect'
+import { obfuscate, analyzeRegisterPressure, type ObfuscateResult } from '@/lib/obfuscator'
 import { Button } from '@/components/ui/button'
 
 const SAMPLE = `-- Sample Luau script
@@ -59,11 +59,10 @@ function formatBytes(chars: number) {
 
 export function ObfuscatorPanel() {
   const [source, setSource] = useState(SAMPLE)
-  const [provider, setProvider] = useState<'existing' | 'luaprotect'>('existing')
   const [targetMillions, setTargetMillions] = useState(2)
   const [chunkSize, setChunkSize] = useState(1024)
   const [seedInput, setSeedInput] = useState('')
-  const [result, setResult] = useState<(ProtectResult & { code: string; size: number; payloadBytes: number; functionCount: number; roundtripOk: boolean; seed: number }) | null>(null)
+  const [result, setResult] = useState<ObfuscateResult | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const [status, setStatus] = useState('Ready')
   const [progress, setProgress] = useState({ done: 0, total: 0 })
@@ -75,36 +74,30 @@ export function ObfuscatorPanel() {
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null)
   const loadstringSnippet = publishedUrl ? `loadstring(game:HttpGet("${publishedUrl}"))()` : ''
   const [registerSafe, setRegisterSafe] = useState(true)
-  const [optimizerReport] = useState<any>(null)
-  const [pressureReport] = useState<any>(null)
+  const [optimizerReport, setOptimizerReport] = useState<any>(null)
+  const [pressureReport, setPressureReport] = useState<any>(null)
   const outputRef = useRef<HTMLTextAreaElement>(null)
 
   const runObfuscate = useCallback(async () => {
-    if (provider === 'luaprotect') {
-      setError('LuaProtect does not currently document a public obfuscation endpoint. Its documented API supports management operations, while dashboard obfuscation requires a private session and Turnstile. No unsupported or unauthenticated request was made.')
-      setStatus('LuaProtect integration unavailable')
-      return
-    }
     const controller = new AbortController()
     abortRef.current = controller
     setBusy(true)
     setError(null)
     setCopied(false)
-    setStatus('Starting rbx.lol protection…')
+    setStatus('Parsing Luau and analyzing scopes…')
     setProgress({ done: 0, total: 0 })
     try {
-      const protectedResult = await protectBig(source, {
-        signal: controller.signal,
-        onStatus: setStatus,
-        onProgress: (done, total) => setProgress({ done, total }),
-      })
-      if (!protectedResult.ok || !protectedResult.out) {
-        setResult(null)
-        setError(protectedResult.error || 'Protection failed.')
-        return
-      }
-      setResult({ ...protectedResult, code: protectedResult.out, size: protectedResult.out.length, payloadBytes: source.length, functionCount: 0, roundtripOk: true, seed: 0 })
-      setStatus('Protection complete')
+      setProgress({ done: 1, total: 3 })
+      const pressure = analyzeRegisterPressure(source)
+      setStatus('Applying syntax-aware scope transformations…')
+      const transformed = obfuscate(source, { preset: registerSafe ? 'balanced' : 'light', seed: seedInput.trim() ? Number(seedInput) >>> 0 : undefined })
+      setProgress({ done: 2, total: 3 })
+      setResult(transformed)
+      setPressureReport(transformed.pressure)
+      setOptimizerReport({ warnings: transformed.warnings, serviceLookupsRewritten: 0, serviceLookupsFound: 0, playerGuiLookupsRewritten: 0, playerGuiLookupsFound: 0, skippedWindUI: 0 })
+      setStatus(transformed.verification.syntax ? 'Syntax validation complete' : 'Validation failed')
+      setProgress({ done: 3, total: 3 })
+      if (pressure.level === 'unsafe') setError(transformed.warnings.join(' '))
     } catch (e) {
       setResult(null)
       setError(e instanceof Error ? e.message : 'Protection failed.')
@@ -112,7 +105,7 @@ export function ObfuscatorPanel() {
       abortRef.current = null
       setBusy(false)
     }
-  }, [provider, source])
+  }, [source, registerSafe, seedInput])
 
   const cancelObfuscate = useCallback(() => {
     abortRef.current?.abort()
@@ -193,31 +186,21 @@ export function ObfuscatorPanel() {
               Luau VM Obfuscator
             </h1>
             <p className="text-sm text-muted-foreground">
-              Heavy VM-layer protection · byte-lossless · under the 200-function limit
+              Syntax-aware Luau transformation · scope-safe renaming · verified output
             </p>
           </div>
           <Link href="/links" className="ml-auto text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">Manage links</Link>
         </div>
         <p className="max-w-3xl text-pretty text-sm leading-relaxed text-muted-foreground">
-          Your source is encoded byte-for-byte through a rolling key, arithmetic position mixing,
-          and a randomized 256-entry S-box, then reconstructed and executed at runtime. The
-          generated wrapper defines{' '}
-          <span className="font-mono text-accent">zero</span> Lua functions of its own — only the
-          functions your original script already declares ever exist.
+The engine parses Luau into an AST, analyzes lexical bindings, renames only proven local references,
+  and prints a compact validated result. Globals, properties, table keys, strings, and comments are
+  not renamed as identifiers. Compiler and behavior verification are reported separately when tooling is unavailable.
         </p>
       </header>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Input side */}
         <section className="flex flex-col gap-4">
-          <div className="rounded-lg border border-border bg-card/60 p-4">
-            <label htmlFor="provider" className="mb-2 block text-xs font-medium text-muted-foreground">Obfuscation provider</label>
-            <select id="provider" value={provider} onChange={(event) => { setProvider(event.target.value as 'existing' | 'luaprotect'); setError(null) }} className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40">
-              <option value="existing">My existing obfuscator (rbx.lol)</option>
-              <option value="luaprotect">LuaProtect (not available via documented public API)</option>
-            </select>
-            {provider === 'luaprotect' && <p className="mt-2 text-xs leading-relaxed text-muted-foreground">LuaProtect&apos;s documented API does not expose script obfuscation. Dashboard obfuscation uses an internal session/Turnstile flow, so it is not called here.</p>}
-          </div>
           <div className="flex items-center justify-between">
             <label
               htmlFor="source"
@@ -264,8 +247,8 @@ export function ObfuscatorPanel() {
     <label className="flex cursor-pointer items-start gap-3">
       <input type="checkbox" checked={registerSafe} onChange={(e) => setRegisterSafe(e.target.checked)} className="mt-1 size-4 accent-primary" />
       <span>
-        <span className="block font-mono text-sm font-medium text-foreground">Register-safe optimizer</span>
-        <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">Deduplicates exact repeated service and PlayerGui lookups only. WindUI callbacks and feature code are skipped.</span>
+        <span className="block font-mono text-sm font-medium text-foreground">Scope analysis and register diagnostics</span>
+        <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">Counts lexical bindings per function and warns before the conservative 200-local threshold. No unverified storage rewrite is emitted.</span>
       </span>
     </label>
     {optimizerReport && (
@@ -281,7 +264,7 @@ export function ObfuscatorPanel() {
         <p className="font-medium">Register check: {pressureReport.likelyLimitExceeded ? 'high risk' : 'no likely limit breach detected'}</p>
         <p className="mt-1">{pressureReport.message}</p>
         {pressureReport.lines.length > 0 && <p className="mt-1">Review near source lines: {pressureReport.lines.join(', ')}.</p>}
-        <p className="mt-1">Obfuscation is still allowed, but this check cannot safely rewrite a large scope automatically.</p>
+        <p className="mt-1">Large scopes are reported honestly; no unverified local-storage rewrite is emitted.</p>
       </div>
     )}
   </section>
