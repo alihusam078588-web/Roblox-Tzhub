@@ -59,6 +59,7 @@ function formatBytes(chars: number) {
 
 export function ObfuscatorPanel() {
   const [source, setSource] = useState(SAMPLE)
+  const [provider, setProvider] = useState<'existing' | 'luaprotect'>('existing')
   const [targetMillions, setTargetMillions] = useState(2)
   const [chunkSize, setChunkSize] = useState(1024)
   const [seedInput, setSeedInput] = useState('')
@@ -79,6 +80,11 @@ export function ObfuscatorPanel() {
   const outputRef = useRef<HTMLTextAreaElement>(null)
 
   const runObfuscate = useCallback(async () => {
+    if (provider === 'luaprotect') {
+      setError('LuaProtect does not currently document a public obfuscation endpoint. Its documented API supports management operations, while dashboard obfuscation requires a private session and Turnstile. No unsupported or unauthenticated request was made.')
+      setStatus('LuaProtect integration unavailable')
+      return
+    }
     const controller = new AbortController()
     abortRef.current = controller
     setBusy(true)
@@ -106,7 +112,7 @@ export function ObfuscatorPanel() {
       abortRef.current = null
       setBusy(false)
     }
-  }, [source])
+  }, [provider, source])
 
   const cancelObfuscate = useCallback(() => {
     abortRef.current?.abort()
@@ -204,6 +210,14 @@ export function ObfuscatorPanel() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Input side */}
         <section className="flex flex-col gap-4">
+          <div className="rounded-lg border border-border bg-card/60 p-4">
+            <label htmlFor="provider" className="mb-2 block text-xs font-medium text-muted-foreground">Obfuscation provider</label>
+            <select id="provider" value={provider} onChange={(event) => { setProvider(event.target.value as 'existing' | 'luaprotect'); setError(null) }} className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40">
+              <option value="existing">My existing obfuscator (rbx.lol)</option>
+              <option value="luaprotect">LuaProtect (not available via documented public API)</option>
+            </select>
+            {provider === 'luaprotect' && <p className="mt-2 text-xs leading-relaxed text-muted-foreground">LuaProtect&apos;s documented API does not expose script obfuscation. Dashboard obfuscation uses an internal session/Turnstile flow, so it is not called here.</p>}
+          </div>
           <div className="flex items-center justify-between">
             <label
               htmlFor="source"
