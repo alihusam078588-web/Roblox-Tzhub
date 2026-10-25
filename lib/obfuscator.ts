@@ -116,13 +116,23 @@ function makeName(index: number): string {
   return '_' + name
 }
 
-function renameBindings(program: any, analysis: any): number {
+function makeHeavyName(index: number): string {
+  let value = (0x9e3779b9 ^ Math.imul(index + 1, 0x45d9f3b)) >>> 0
+  let name = '_'
+  for (let i = 0; i < 7; i++) {
+    value = Math.imul(value ^ (value >>> 16), 0x45d9f3b) >>> 0
+    name += (value % 36).toString(36)
+  }
+  return name
+}
+
+function renameBindings(program: any, analysis: any, heavy = false): number {
   let renamed = 0
   let index = 0
   for (const binding of analysis.bindings.values() as any) {
     if (binding.kind === 'global' || binding.isBuiltin || !binding.declarationNode) continue
-    let name = makeName(index++)
-    while (RESERVED.has(name)) name = makeName(index++)
+    let name = heavy ? makeHeavyName(index++) : makeName(index++)
+    while (RESERVED.has(name)) name = heavy ? makeHeavyName(index++) : makeName(index++)
     binding.name = name
     binding.declarationNode.name = name
     for (const reference of binding.references) reference.name = name
@@ -156,7 +166,7 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
   const spill = spillExcessLocals(program, pressure)
   const analysis: any = analyzeScopes(program, { builtinGlobals: BUILTINS })
   const preset = options.preset ?? 'balanced'
-  const renamed = options.renameLocals ?? preset !== 'light' ? renameBindings(program, analysis) : 0
+  const renamed = options.renameLocals ?? preset !== 'light' ? renameBindings(program, analysis, preset === 'maximum') : 0
   const stringMode = preset === 'maximum' ? 'all' : preset === 'balanced' ? 'long' : 'none'
   const encodedStrings = encodeStringLiterals(program, stringMode)
   const printed = print(program, { quote: '"' })
