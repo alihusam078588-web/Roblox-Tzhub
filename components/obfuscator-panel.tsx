@@ -92,7 +92,9 @@ export function ObfuscatorPanel() {
       const transformed = obfuscate(source, configuration)
       setProgress({ done: 2, total: 3 })
       setResult(transformed)
-      setStatus(transformed.verification.syntax ? `Syntax validation complete · ${formatBytes(transformed.size)}` : 'Validation failed')
+      const targetBytes = configuration.targetSize
+      const targetStatus = transformed.size >= targetBytes ? `target reached (${formatBytes(targetBytes)})` : `target not reached (${formatBytes(transformed.size)} / ${formatBytes(targetBytes)})`
+      setStatus(transformed.verification.syntax ? `Syntax validation complete · ${formatBytes(transformed.size)} · ${targetStatus}` : 'Validation failed')
       setProgress({ done: 3, total: 3 })
       if (transformed.pressure.level === 'unsafe') setError(transformed.warnings.join(' '))
     } catch (e) {

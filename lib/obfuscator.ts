@@ -131,6 +131,24 @@ function renameBindings(program: any, analysis: any): number {
   return renamed
 }
 
+function numberLiteral(value: number): any { return { type: 'NumberLiteral', value, raw: String(value), line: { start: 0, end: 0 }, column: { start: 0, end: 0 } } }
+
+function encodeStringLiterals(program: any, mode: 'none' | 'long' | 'all'): number {
+  let encoded = 0
+  walk(program, (node) => {
+    if (node.type !== 'StringLiteral' || typeof node.value !== 'string') return
+    if (mode === 'none' || (mode === 'long' && node.value.length < 4)) return
+    const chars = [...node.value].map((char) => numberLiteral(char.codePointAt(0) ?? 0))
+    node.type = 'CallExpression'
+    node.callee = { type: 'MemberExpression', object: { type: 'Identifier', name: 'string' }, property: { type: 'Identifier', name: 'char' } }
+    node.arguments = chars
+    delete node.value
+    delete node.raw
+    encoded++
+  })
+  return encoded
+}
+
 function preserveDirectives(source: string): string {
   const directives = source.split(/\r?\n/).filter((line) => /^\s*--!/.test(line))
   return directives.length ? directives.join('\n') + '\n' : ''
@@ -149,13 +167,17 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
   const analysis: any = analyzeScopes(program, { builtinGlobals: BUILTINS })
   const preset = options.preset ?? 'balanced'
   const renamed = options.renameLocals ?? preset !== 'light' ? renameBindings(program, analysis) : 0
+  const stringMode = preset === 'maximum' ? 'all' : preset === 'balanced' ? 'long' : 'none'
+  const encodedStrings = encodeStringLiterals(program, stringMode)
   const printed = print(program, { quote: '"' })
   const rendered = options.minify === false ? printed.trim() : printed.replace(/\s+/g, ' ').trim()
   const code = preserveDirectives(source) + rendered + '\n'
   const verification = (() => { try { parse(code); return true } catch { return false } })()
   if (!verification) throw new Error('Generated output failed syntax validation.')
-  const warnings = [...(spill.unsupported ? [spill.message] : []), ...(pressure.level === 'high' ? ['High register pressure detected; no unverified local-storage rewrite was applied.'] : []), ...(pressure.level === 'unsafe' ? ['This input exceeds the conservative 200-local threshold. Output is not claimed to repair compiler register allocation.'] : []), ...(preset === 'maximum' ? ['Maximum selects stronger safe renaming only; VM protection and constant encryption are intentionally unsupported.'] : []), `${renamed} lexical bindings renamed with scope analysis.`]
-  return { code, size: code.length, functionCount: pressure.estimatedFunctions, roundtripOk: true, seed: options.seed ?? 0, payloadBytes: new TextEncoder().encode(source).length, pressure, spill, warnings, verification: { syntax: true, compiler: 'unavailable', behavior: 'not-executed' } }
+  const size = new TextEncoder().encode(code).byteLength
+  const target = options.targetSize ?? 0
+  const warnings = [...(spill.unsupported ? [spill.message] : []), ...(pressure.level === 'high' ? ['High register pressure detected; no unverified local-storage rewrite was applied.'] : []), ...(pressure.level === 'unsafe' ? ['This input exceeds the conservative 200-local threshold. Output is not claimed to repair compiler register allocation.'] : []), `${renamed} lexical bindings renamed with scope analysis.`, `${encodedStrings} string literals encoded with runtime string.char reconstruction.`, ...(target > 0 && size < target ? [`Genuine transformations produced ${size} bytes, below the ${target} byte target; no padding or junk was added.`] : [])]
+  return { code, size, functionCount: pressure.estimatedFunctions, roundtripOk: true, seed: options.seed ?? 0, payloadBytes: new TextEncoder().encode(source).length, pressure, spill, warnings, verification: { syntax: true, compiler: 'unavailable', behavior: 'not-executed' } }
 }
 
 export function optimizeRegisterSafe(source: string) { return { source, serviceLookupsFound: 0, serviceLookupsRewritten: 0, playerGuiLookupsFound: 0, playerGuiLookupsRewritten: 0, skippedWindUI: 0, warnings: ['Safe optimizer performs no storage rewrite without a verified Luau compiler.'] } }
