@@ -131,22 +131,12 @@ function renameBindings(program: any, analysis: any): number {
   return renamed
 }
 
-function numberLiteral(value: number): any { return { type: 'NumberLiteral', value, raw: String(value), line: { start: 0, end: 0 }, column: { start: 0, end: 0 } } }
-
-function encodeStringLiterals(program: any, mode: 'none' | 'long' | 'all'): number {
-  let encoded = 0
-  walk(program, (node) => {
-    if (node.type !== 'StringLiteral' || typeof node.value !== 'string') return
-    if (mode === 'none' || (mode === 'long' && node.value.length < 4)) return
-    const chars = [...node.value].map((char) => numberLiteral(char.codePointAt(0) ?? 0))
-    node.type = 'CallExpression'
-    node.callee = { type: 'MemberExpression', object: { type: 'Identifier', name: 'string' }, property: { type: 'Identifier', name: 'char' } }
-    node.arguments = chars
-    delete node.value
-    delete node.raw
-    encoded++
-  })
-  return encoded
+function encodeStringLiterals(_program: any, _mode: 'none' | 'long' | 'all'): number {
+  // Deliberately disabled: rewriting literals to string.char(...) can change behavior
+  // when `string` is shadowed, depends on mutable globals, loses exact byte sequences,
+  // and creates unbounded argument lists for large literals. The AST printer preserves
+  // the parser's decoded literal value, including Unicode, escapes, and null bytes.
+  return 0
 }
 
 function preserveDirectives(source: string): string {
@@ -176,7 +166,7 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
   if (!verification) throw new Error('Generated output failed syntax validation.')
   const size = new TextEncoder().encode(code).byteLength
   const target = options.targetSize ?? 0
-  const warnings = [...(spill.unsupported ? [spill.message] : []), ...(pressure.level === 'high' ? ['High register pressure detected; no unverified local-storage rewrite was applied.'] : []), ...(pressure.level === 'unsafe' ? ['This input exceeds the conservative 200-local threshold. Output is not claimed to repair compiler register allocation.'] : []), `${renamed} lexical bindings renamed with scope analysis.`, `${encodedStrings} string literals encoded with runtime string.char reconstruction.`, ...(target > 0 && size < target ? [`Genuine transformations produced ${size} bytes, below the ${target} byte target; no padding or junk was added.`] : [])]
+  const warnings = [...(spill.unsupported ? [spill.message] : []), ...(pressure.level === 'high' ? ['High register pressure detected; no unverified local-storage rewrite was applied.'] : []), ...(pressure.level === 'unsafe' ? ['This input exceeds the conservative 200-local threshold. Output is not claimed to repair compiler register allocation.'] : []), `${renamed} lexical bindings renamed with scope analysis.`, `${encodedStrings} string literals rewritten; literal bytes were preserved without runtime reconstruction.`, ...(target > 0 && size < target ? [`Genuine transformations produced ${size} bytes, below the ${target} byte target; no padding or junk was added.`] : [])]
   return { code, size, functionCount: pressure.estimatedFunctions, roundtripOk: true, seed: options.seed ?? 0, payloadBytes: new TextEncoder().encode(source).length, pressure, spill, warnings, verification: { syntax: true, compiler: 'unavailable', behavior: 'not-executed' } }
 }
 
