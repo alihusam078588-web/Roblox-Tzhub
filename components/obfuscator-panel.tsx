@@ -16,7 +16,7 @@ import {
   LockKeyhole,
   Link as LinkIcon,
 } from 'lucide-react'
-import { obfuscate, analyzeRegisterPressure, type ObfuscateResult } from '@/lib/obfuscator'
+import { obfuscate, type ObfuscateResult } from '@/lib/obfuscator'
 import { Button } from '@/components/ui/button'
 
 const SAMPLE = `-- Sample Luau script
@@ -59,9 +59,7 @@ function formatBytes(chars: number) {
 
 export function ObfuscatorPanel() {
   const [source, setSource] = useState(SAMPLE)
-  const [targetMillions, setTargetMillions] = useState(2)
-  const [chunkSize, setChunkSize] = useState(1024)
-  const [seedInput, setSeedInput] = useState('')
+  const [level, setLevel] = useState<'low' | 'default' | 'heavy'>('default')
   const [result, setResult] = useState<ObfuscateResult | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const [status, setStatus] = useState('Ready')
@@ -73,9 +71,6 @@ export function ObfuscatorPanel() {
   const [publishing, setPublishing] = useState(false)
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null)
   const loadstringSnippet = publishedUrl ? `loadstring(game:HttpGet("${publishedUrl}"))()` : ''
-  const [registerSafe, setRegisterSafe] = useState(true)
-  const [optimizerReport, setOptimizerReport] = useState<any>(null)
-  const [pressureReport, setPressureReport] = useState<any>(null)
   const outputRef = useRef<HTMLTextAreaElement>(null)
 
   const runObfuscate = useCallback(async () => {
@@ -88,16 +83,18 @@ export function ObfuscatorPanel() {
     setProgress({ done: 0, total: 0 })
     try {
       setProgress({ done: 1, total: 3 })
-      const pressure = analyzeRegisterPressure(source)
-      setStatus('Applying syntax-aware scope transformations…')
-      const transformed = obfuscate(source, { preset: registerSafe ? 'balanced' : 'light', seed: seedInput.trim() ? Number(seedInput) >>> 0 : undefined })
+      setStatus(`Applying ${level} syntax-aware transformations…`)
+      const configuration = level === 'low'
+        ? { preset: 'light' as const, renameLocals: false, minify: false, targetSize: 500 * 1024 }
+        : level === 'heavy'
+          ? { preset: 'maximum' as const, renameLocals: true, minify: true, targetSize: 2 * 1024 * 1024 }
+          : { preset: 'balanced' as const, renameLocals: true, minify: true, targetSize: 1024 * 1024 }
+      const transformed = obfuscate(source, configuration)
       setProgress({ done: 2, total: 3 })
       setResult(transformed)
-      setPressureReport(transformed.pressure)
-      setOptimizerReport({ warnings: transformed.warnings, serviceLookupsRewritten: 0, serviceLookupsFound: 0, playerGuiLookupsRewritten: 0, playerGuiLookupsFound: 0, skippedWindUI: 0 })
-      setStatus(transformed.verification.syntax ? 'Syntax validation complete' : 'Validation failed')
+      setStatus(transformed.verification.syntax ? `Syntax validation complete · ${formatBytes(transformed.size)}` : 'Validation failed')
       setProgress({ done: 3, total: 3 })
-      if (pressure.level === 'unsafe') setError(transformed.warnings.join(' '))
+      if (transformed.pressure.level === 'unsafe') setError(transformed.warnings.join(' '))
     } catch (e) {
       setResult(null)
       setError(e instanceof Error ? e.message : 'Protection failed.')
@@ -105,7 +102,7 @@ export function ObfuscatorPanel() {
       abortRef.current = null
       setBusy(false)
     }
-  }, [source, registerSafe, seedInput])
+  }, [source, level])
 
   const cancelObfuscate = useCallback(() => {
     abortRef.current?.abort()
@@ -137,7 +134,7 @@ export function ObfuscatorPanel() {
       const response = await fetch('/api/publish', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password, source: result.code, targetSize: targetMillions * 1_000_000, chunkSize, seed: result.seed }),
+        body: JSON.stringify({ password, source: result.code, targetSize: level === 'low' ? 500 * 1024 : level === 'heavy' ? 2 * 1024 * 1024 : 1024 * 1024 }),
       })
       const data = await response.json()
       if (!response.ok) throw new Error(data.error || 'Publish failed.')
@@ -148,7 +145,7 @@ export function ObfuscatorPanel() {
     } finally {
       setPublishing(false)
     }
-  }, [result, password, source, targetMillions, chunkSize])
+  }, [result, password, level])
 
   const handleDownload = useCallback(() => {
     if (!result) return
@@ -243,77 +240,15 @@ The engine parses Luau into an AST, analyzes lexical bindings, renames only prov
             className="h-80 w-full resize-y rounded-lg border border-border bg-card p-4 font-mono text-[13px] leading-relaxed text-card-foreground shadow-inner outline-none transition-colors placeholder:text-muted-foreground/60 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
           />
 
-  <section className="rounded-lg border border-accent/30 bg-accent/5 p-4">
-    <label className="flex cursor-pointer items-start gap-3">
-      <input type="checkbox" checked={registerSafe} onChange={(e) => setRegisterSafe(e.target.checked)} className="mt-1 size-4 accent-primary" />
-      <span>
-        <span className="block font-mono text-sm font-medium text-foreground">Scope analysis and register diagnostics</span>
-        <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">Counts lexical bindings per function and warns before the conservative 200-local threshold. No unverified storage rewrite is emitted.</span>
-      </span>
-    </label>
-    {optimizerReport && (
-      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-        <span>Services: {optimizerReport.serviceLookupsRewritten} rewritten / {optimizerReport.serviceLookupsFound} found</span>
-        <span>PlayerGui: {optimizerReport.playerGuiLookupsRewritten} rewritten / {optimizerReport.playerGuiLookupsFound} found</span>
-        <span>WindUI skipped: {optimizerReport.skippedWindUI}</span>
-      </div>
-    )}
-    {optimizerReport?.warnings.map((warning: string) => <p key={warning} className="mt-2 text-xs text-muted-foreground">{warning}</p>)}
-    {pressureReport && (
-      <div className={`mt-3 rounded-md border p-3 text-xs ${pressureReport.likelyLimitExceeded ? 'border-destructive/40 bg-destructive/10 text-destructive' : 'border-border bg-background text-muted-foreground'}`}>
-        <p className="font-medium">Register check: {pressureReport.likelyLimitExceeded ? 'high risk' : 'no likely limit breach detected'}</p>
-        <p className="mt-1">{pressureReport.message}</p>
-        {pressureReport.lines.length > 0 && <p className="mt-1">Review near source lines: {pressureReport.lines.join(', ')}.</p>}
-        <p className="mt-1">Large scopes are reported honestly; no unverified local-storage rewrite is emitted.</p>
-      </div>
-    )}
+  <section className="rounded-lg border border-border bg-card/60 p-4">
+    <label htmlFor="level" className="mb-2 block font-mono text-sm font-medium text-foreground">Obfuscation Level</label>
+    <select id="level" value={level} onChange={(event) => setLevel(event.target.value as 'low' | 'default' | 'heavy')} className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40">
+      <option value="low">Low — 500+ KB obfuscated output target</option>
+      <option value="default">Default — 1 MB obfuscated output target</option>
+      <option value="heavy">Heavy — 2 MB obfuscated output target</option>
+    </select>
+    <p className="mt-2 text-xs text-muted-foreground">Targets are minimum goals, not padding instructions. The generated byte size below is always measured from the actual output.</p>
   </section>
-
-  {/* Controls */}
-  <div className="grid grid-cols-2 gap-4 rounded-lg border border-border bg-card/60 p-4 sm:grid-cols-3">
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="target" className="text-xs font-medium text-muted-foreground">
-                Target size (M chars)
-              </label>
-              <input
-                id="target"
-                type="number"
-                min={0}
-                step={0.5}
-                value={targetMillions}
-                onChange={(e) => setTargetMillions(Number(e.target.value))}
-                className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="chunk" className="text-xs font-medium text-muted-foreground">
-                Chunk size (bytes)
-              </label>
-              <input
-                id="chunk"
-                type="number"
-                min={64}
-                step={64}
-                value={chunkSize}
-                onChange={(e) => setChunkSize(Number(e.target.value))}
-                className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="seed" className="text-xs font-medium text-muted-foreground">
-                Seed (optional)
-              </label>
-              <input
-                id="seed"
-                type="text"
-                inputMode="numeric"
-                value={seedInput}
-                onChange={(e) => setSeedInput(e.target.value)}
-                placeholder="random"
-                className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-sm text-foreground outline-none placeholder:text-muted-foreground/60 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
-              />
-            </div>
-          </div>
 
           <Button
             onClick={runObfuscate}

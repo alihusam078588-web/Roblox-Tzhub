@@ -149,7 +149,8 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
   const analysis: any = analyzeScopes(program, { builtinGlobals: BUILTINS })
   const preset = options.preset ?? 'balanced'
   const renamed = options.renameLocals ?? preset !== 'light' ? renameBindings(program, analysis) : 0
-  const rendered = print(program, { quote: '"' }).replace(/\s+/g, ' ').trim()
+  const printed = print(program, { quote: '"' })
+  const rendered = options.minify === false ? printed.trim() : printed.replace(/\s+/g, ' ').trim()
   const code = preserveDirectives(source) + rendered + '\n'
   const verification = (() => { try { parse(code); return true } catch { return false } })()
   if (!verification) throw new Error('Generated output failed syntax validation.')
