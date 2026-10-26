@@ -170,13 +170,15 @@ export function obfuscate(source: string, options: ObfuscateOptions = {}): Obfus
   const stringMode = preset === 'maximum' ? 'all' : preset === 'balanced' ? 'long' : 'none'
   const encodedStrings = encodeStringLiterals(program, stringMode)
   const printed = print(program, { quote: '"' })
-  const rendered = options.minify === false ? printed.trim() : printed.replace(/\s+/g, ' ').trim()
+  // Retain AST printer formatting until a token-aware minifier is available; global whitespace
+  // collapsing can change string literals and comments.
+  const rendered = printed.trim()
   const code = preserveDirectives(source) + rendered + '\n'
   const verification = (() => { try { parse(code); return true } catch { return false } })()
   if (!verification) throw new Error('Generated output failed syntax validation.')
   const size = new TextEncoder().encode(code).byteLength
   const target = options.targetSize ?? 0
-  const warnings = [...(spill.unsupported ? [spill.message] : []), ...(pressure.level === 'high' ? ['High register pressure detected; no unverified local-storage rewrite was applied.'] : []), ...(pressure.level === 'unsafe' ? ['This input exceeds the conservative 200-local threshold. Output is not claimed to repair compiler register allocation.'] : []), `${renamed} lexical bindings renamed with scope analysis.`, `${encodedStrings} string literals rewritten; literal bytes were preserved without runtime reconstruction.`, ...(target > 0 && size < target ? [`Genuine transformations produced ${size} bytes, below the ${target} byte target; no padding or junk was added.`] : [])]
+  const warnings = [...(spill.unsupported ? [spill.message] : []), ...(pressure.level === 'high' ? ['High register pressure detected; no unverified local-storage rewrite was applied.'] : []), ...(pressure.level === 'unsafe' ? ['This input exceeds the conservative 200-local threshold. Output is not claimed to repair compiler register allocation.'] : []), `${renamed} lexical bindings renamed with scope analysis.`, 'Token-safe minification is not enabled; AST formatting is retained to avoid changing string/comment contents.', `${encodedStrings} string literals rewritten; string-literal encoding is disabled to preserve exact behavior.`, ...(target > 0 && size < target ? [`Genuine transformations produced ${size} bytes, below the ${target} byte target; no padding or junk was added.`] : [])]
   return { code, size, functionCount: pressure.estimatedFunctions, roundtripOk: true, seed: options.seed ?? 0, payloadBytes: new TextEncoder().encode(source).length, pressure, spill, warnings, verification: { syntax: true, compiler: 'unavailable', behavior: 'not-executed' } }
 }
 
